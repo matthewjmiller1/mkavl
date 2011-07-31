@@ -138,7 +138,7 @@ extern bool
 mkavl_lookup_type_e_is_valid(mkavl_lookup_type_e type);
 
 extern const char *
-mkavl_lookup_type_e_get_string(mkavl_lookup_type_e rc);
+mkavl_lookup_type_e_get_string(mkavl_lookup_type_e type);
 
 /* AVL APIs */
 

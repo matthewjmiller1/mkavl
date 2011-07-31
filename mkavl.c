@@ -25,6 +25,17 @@
 #include "mkavl.h"
 #include "libavl/avl.h"
 
+/**
+ * Compile time assert macro from:
+ * http://www.pixelbeat.org/programming/gcc/static_assert.html 
+ */
+#define CT_ASSERT(e) extern char (*CT_ASSERT(void)) [sizeof(char[1 - 2*!(e)])]
+
+/**
+ * Determine the number of elements in an array.
+ */
+#define NELEMS(x) (sizeof(x) / sizeof(x[0]))
+
 typedef struct mkavl_tree_st_ {
     uint8_t dummy;
 } mkavl_tree_st;
@@ -33,40 +44,129 @@ typedef struct mkavl_iterator_st_ {
     uint8_t dummy;
 } mkavl_iterator_st;
 
+/**
+ * String representations of the return codes.
+ *
+ * @see mkavl_rc_e
+ */
+static const char * const mkavl_rc_e_string[] = {
+    "Invalid RC",
+    "Success",
+    "Invalid input",
+    "No memory",
+    "Max RC"
+};
+
+/** @cond doxygen_suppress */
+/* Ensure there is a string for each enum declared */
+CT_ASSERT(NELEMS(mkavl_rc_e_string) == (MKAVL_RC_E_MAX + 1));
+/** @endcond */
+
+/**
+ * Indicates whether the return code is not in error.
+ *
+ * @param rc The return code to check
+ * @return true if the return code is not in error.
+ */
 bool
 mkavl_rc_e_is_notok (mkavl_rc_e rc)
 {
-    return (false);
+    return (MKAVL_RC_E_SUCCESS != rc);
 }
 
+/**
+ * Indicates whether the return code is in error.
+ *
+ * @param rc The return code to check
+ * @return true if the return code is not in error.
+ */
 bool
 mkavl_rc_e_is_ok (mkavl_rc_e rc)
 {
-    return (false);
+    return (MKAVL_RC_E_SUCCESS == rc);
 }
 
+/**
+ * Indicates whether the return code is valid.
+ *
+ * @param rc The return code to check
+ * @return true if the return code is valid.
+ */
 bool
 mkavl_rc_e_is_valid (mkavl_rc_e rc)
 {
-    return (false);
+    return ((rc >= MKAVL_RC_E_INVALID) && (rc <= MKAVL_RC_E_MAX));
 }
 
+/**
+ * Get a string representation of the return code.
+ *
+ * @param rc The return code
+ * @return A string representation of the return code or "__Invalid__" if an
+ * invalid return code is input.
+ */
 const char *
 mkavl_rc_e_get_string (mkavl_rc_e rc)
 {
-    return ("");
+    const char* retval = "__Invalid__";
+
+    if (mkavl_rc_e_is_valid(rc)) {
+        retval = mkavl_rc_e_string[rc];
+    }
+
+    return (retval);
 }
 
+/**
+ * String representations of the return codes.
+ *
+ * @see mkavl_find_type_e
+ */
+static const char * const mkavl_find_type_e_string[] = {
+    "Invalid",
+    "Equal",
+    "Greater than",
+    "Less than",
+    "Greater than or equal",
+    "Less than or equal",
+    "Max type"
+};
+
+/** @cond doxygen_suppress */
+/* Ensure there is a string for each enum declared */
+CT_ASSERT(NELEMS(mkavl_find_type_e_string) == (MKAVL_FIND_TYPE_E_MAX + 1));
+/** @endcond */
+
+/**
+ * Indicates whether the return code is valid.
+ *
+ * @param rc The return code to check
+ * @return true if the return code is valid.
+ */
 bool
 mkavl_lookup_type_e_is_valid (mkavl_lookup_type_e type)
 {
-    return (false);
+    return ((rc >= MKAVL_LOOKUP_TYPE_E_INVALID) && 
+            (rc <= MKAVL_LOOKUP_TYPE_E_MAX));
 }
 
+/**
+ * Get a string representation of the lookup type.
+ *
+ * @param type The lookup type
+ * @return A string representation of the return code or "__Invalid__" if an
+ * invalid return code is input.
+ */
 const char *
-mkavl_lookup_type_e_get_string (mkavl_lookup_type_e rc)
+mkavl_lookup_type_e_get_string (mkavl_lookup_type_e type)
 {
-    return ("");
+    const char* retval = "__Invalid__";
+
+    if (mkavl_find_type_e_is_valid(rc)) {
+        retval = mkavl_find_type_e_string[rc];
+    }
+
+    return (retval);
 
 }
 
