@@ -24,6 +24,12 @@
 #ifndef __MKAVL_H__
 #define __MKAVL_H__
 
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <assert.h>
+
 /** Opaque pointer to reference instances of AVL trees */
 typedef struct mkavl_tree_st_ *mkavl_tree_handle;
 
@@ -116,7 +122,7 @@ typedef void *
  */
 typedef mkavl_rc_e
 (*mkavl_walk_cb_fn)(void *item, void *tree_context, void *walk_context,
-                    boolean *stop_walk);
+                    bool *stop_walk);
 
 /* APIs below are documented in their implementation file */
 
@@ -135,10 +141,10 @@ extern const char *
 mkavl_rc_e_get_string(mkavl_rc_e rc);
 
 extern bool
-mkavl_lookup_type_e_is_valid(mkavl_lookup_type_e type);
+mkavl_find_type_e_is_valid(mkavl_find_type_e type);
 
 extern const char *
-mkavl_lookup_type_e_get_string(mkavl_lookup_type_e type);
+mkavl_find_type_e_get_string(mkavl_find_type_e type);
 
 /* AVL APIs */
 
@@ -179,10 +185,10 @@ mkavl_remove_key_idx(mkavl_tree_handle tree_h, size_t key_idx,
 /* AVL utility functions */
 
 extern uint32_t
-mkavl_count(mkavl_tree_handle tree_h tree_h, size_t key_idx);
+mkavl_count(mkavl_tree_handle tree_h, size_t key_idx);
 
 extern mkavl_rc_e
-mkavl_walk(mkavl_tree_handle tree_h tree_h, mkavl_walk_cb_fn cb_fn,
+mkavl_walk(mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
            void *walk_context);
 
 // TODO: selective delete walk function?

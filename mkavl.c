@@ -58,9 +58,18 @@ typedef struct mkavl_avl_tree_st_ {
     mkavl_avl_ctx_st *avl_ctx;
 } mkavl_avl_tree_st;
 
+typedef struct mkavl_allocator_wrapper_st_ {
+    /**
+     * The libavl allocator.  Must be the first member for use in casting.
+     */
+    struct libavl_allocator avl_allocator;
+    uint32_t magic;
+    mkavl_allocator_st mkavl_allocator;
+} mkavl_allocator_wrapper_st;
+
 typedef struct mkavl_tree_st_ {
     void *context;
-    mkavl_allocator_st allocator;
+    mkavl_allocator_wrapper_st allocator;
     size_t avl_tree_count;
     mkavl_avl_tree_st *avl_tree_array;
 } mkavl_tree_st;
@@ -68,11 +77,6 @@ typedef struct mkavl_tree_st_ {
 typedef struct mkavl_iterator_st_ {
     uint8_t dummy;
 } mkavl_iterator_st;
-
-static mkavl_allocator_st mkavl_allocator_default = {
-    malloc,
-    free
-};
 
 /**
  * String representations of the return codes.
@@ -174,51 +178,73 @@ CT_ASSERT(NELEMS(mkavl_find_type_e_string) == (MKAVL_FIND_TYPE_E_MAX + 1));
  * @return true if the return code is valid.
  */
 bool
-mkavl_lookup_type_e_is_valid (mkavl_lookup_type_e type)
+mkavl_find_type_e_is_valid (mkavl_find_type_e type)
 {
-    return ((rc >= MKAVL_LOOKUP_TYPE_E_INVALID) && 
-            (rc <= MKAVL_LOOKUP_TYPE_E_MAX));
+    return ((type >= MKAVL_FIND_TYPE_E_INVALID) && 
+            (type <= MKAVL_FIND_TYPE_E_MAX));
 }
 
 /**
- * Get a string representation of the lookup type.
+ * Get a string representation of the find type.
  *
- * @param type The lookup type
+ * @param type The find type
  * @return A string representation of the return code or "__Invalid__" if an
  * invalid return code is input.
  */
 const char *
-mkavl_lookup_type_e_get_string (mkavl_lookup_type_e type)
+mkavl_find_type_e_get_string (mkavl_find_type_e type)
 {
     const char* retval = "__Invalid__";
 
-    if (mkavl_find_type_e_is_valid(rc)) {
-        retval = mkavl_find_type_e_string[rc];
+    if (mkavl_find_type_e_is_valid(type)) {
+        retval = mkavl_find_type_e_string[type];
     }
 
     return (retval);
-
 }
 
 static void *
 mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
 {
-    // TODO
+    mkavl_allocator_wrapper_st *mkavl_allocator =
+        (mkavl_allocator_wrapper_st *) allocator;
+
+    if ((NULL == mkavl_allocator) ||
+        (MKAVL_CTX_MAGIC != mkavl_allocator->magic) ||
+        (NULL == mkavl_allocator->mkavl_allocator.malloc_fn)) {
+        return (NULL);
+    }
+
+    return (mkavl_allocator->mkavl_allocator.malloc_fn(size));
 }
 
 static void
 mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
 {
-    // TODO
+    mkavl_allocator_wrapper_st *mkavl_allocator =
+        (mkavl_allocator_wrapper_st *) allocator;
+
+    if ((NULL == mkavl_allocator) ||
+        (MKAVL_CTX_MAGIC != mkavl_allocator->magic) ||
+        (NULL == mkavl_allocator->mkavl_allocator.free_fn)) {
+        return;
+    }
+
+    return (mkavl_allocator->mkavl_allocator.free_fn(libavl_block));
 }
+
+static mkavl_allocator_st mkavl_allocator_default = {
+    malloc,
+    free
+};
 
 static struct libavl_allocator mkavl_allocator_wrapper = {
     mkavl_malloc_wrapper,
     mkavl_free_wrapper
-}
+};
 
 static int
-mkavl_compare_wrapper (const void *avl_a, const *avl_b, void *avl_param)
+mkavl_compare_wrapper (const void *avl_a, const void *avl_b, void *avl_param)
 {
     mkavl_avl_ctx_st *avl_ctx;
     mkavl_compare_fn cmp_fn;
@@ -236,44 +262,25 @@ mkavl_compare_wrapper (const void *avl_a, const *avl_b, void *avl_param)
 }
 
 static mkavl_rc_e
-mkavl_copy_allocator (const mkavl_allocator_st *src,
-                      mkavl_allocator_st *dest)
-{
-    /* Always add a new check here if functions are added. */
-    CT_ASSERT(2 == (sizeof(mkavl_allocator_st)/sizeof(void *)));
-
-    if ((NULL == src) || (NULL == dest)) {
-        return (MKAVL_RC_E_EINVAL);
-    }
-
-    dest->malloc_fn = src->malloc_fn;
-    dest->free_fn = src->free_fn;
-
-    return (MKAVL_RC_E_SUCCESS);
-}
-
-static mkavl_rc_e
 mkavl_delete_tree (mkavl_tree_st **tree)
 {
     mkavl_allocator_st local_allocator;
     mkavl_tree_st *local_tree;
     uint32_t i;
-    mkavl_rc_e rc;
 
     if (NULL == tree) {
         return (MKAVL_RC_E_EINVAL);
     }
     local_tree = *tree;
 
+    memcpy(&local_allocator, &(local_tree->allocator.mkavl_allocator),
+           sizeof(local_allocator));
+
     if (NULL == local_tree) {
         return (MKAVL_RC_E_SUCCESS);
     }
 
-    rc = mkavl_copy_allocator(&(local_tree->allocator), &local_allocator);
-    if (mkavl_rc_e_is_notok(rc)) {
-        return (rc);
-    }
-
+    local_tree->allocator.magic = MKAVL_CTX_STALE;
     if (NULL != local_tree->avl_tree_array) {
         for (i = 0; i < local_tree->avl_tree_count; ++i) {
             if (NULL != local_tree->avl_tree_array[i].tree) { 
@@ -313,7 +320,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
     *tree_h = NULL;
 
     local_allocator = 
-        (NULL == allocator) ? &mkavl_default_allocator : allocator;
+        (NULL == allocator) ? &mkavl_allocator_default : allocator;
 
     new_tree = local_allocator->malloc_fn(sizeof(*new_tree));
     if (NULL == new_tree) {
@@ -322,28 +329,29 @@ mkavl_new (mkavl_tree_handle *tree_h,
     }
 
     new_tree->context = context;
-    rc = mkavl_copy_allocator(local_allocator, &(new_tree->allocator));
-    if (mkavl_rc_e_is_notok(rc)) {
-        goto err_exit;
-    }
-    new_tree->avl_tree_count = array_size;
+    memcpy(&(new_tree->allocator.avl_allocator), &mkavl_allocator_wrapper,
+           sizeof(new_tree->allocator.avl_allocator));
+    memcpy(&(new_tree->allocator.mkavl_allocator), &local_allocator,
+           sizeof(new_tree->allocator));
+    new_tree->allocator.magic = MKAVL_CTX_MAGIC;
+    new_tree->avl_tree_count = compare_fn_array_size;
     new_tree->avl_tree_array = NULL;
 
     new_tree->avl_tree_array = 
-        local_allocator->malloc_fn(array_size * 
+        local_allocator->malloc_fn(new_tree->avl_tree_count * 
                                    sizeof(*(new_tree->avl_tree_array)));
     if (NULL == new_tree->avl_tree_array) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
     }
 
-    for (i = 0; i < array_size; ++i) {
+    for (i = 0; i < new_tree->avl_tree_count; ++i) {
         new_tree->avl_tree_array[i].tree = NULL;
         new_tree->avl_tree_array[i].compare_fn = compare_fn_array[i];
         new_tree->avl_tree_array[i].avl_ctx = NULL;
     }
 
-    for (i = 0; i < array_size; ++i) {
+    for (i = 0; i < new_tree->avl_tree_count; ++i) {
         avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx));
         if (NULL == avl_ctx) {
             rc = MKAVL_RC_E_ENOMEM;
@@ -351,15 +359,15 @@ mkavl_new (mkavl_tree_handle *tree_h,
         }
         avl_ctx->magic = MKAVL_CTX_STALE;
 
-        new_tree->avl_tree_array[i].tree = avl_create(mkavl_compare_wrapper,
-                                                      avl_ctx,
-                                                      mkavl_allocator_wrapper);
+        new_tree->avl_tree_array[i].tree = 
+            avl_create(mkavl_compare_wrapper, avl_ctx,
+                       &(new_tree->allocator.avl_allocator));
         if (NULL == new_tree->avl_tree_array[i].tree) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
         }
 
-        avl_ctx->tree = new_tree->avl_tree_array[i].tree;
+        avl_ctx->tree = new_tree;
         avl_ctx->key_idx = i;
         avl_ctx->magic = MKAVL_CTX_MAGIC;
         new_tree->avl_tree_array[i].avl_ctx = avl_ctx;
@@ -435,13 +443,13 @@ mkavl_remove_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
 }
 
 uint32_t
-mkavl_count (mkavl_tree_handle tree_h tree_h, size_t key_idx)
+mkavl_count (mkavl_tree_handle tree_h, size_t key_idx)
 {
     return (0);
 }
 
 mkavl_rc_e
-mkavl_walk (mkavl_tree_handle tree_h tree_h, mkavl_walk_cb_fn cb_fn,
+mkavl_walk (mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
             void *walk_context)
 {
     return (MKAVL_RC_E_SUCCESS);
