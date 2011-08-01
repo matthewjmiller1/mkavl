@@ -48,6 +48,8 @@ typedef enum mkavl_rc_e_ {
     MKAVL_RC_E_EINVAL,
     /** Function failed to allocate memory */
     MKAVL_RC_E_ENOMEM,
+    /** Internal data structures are out of sync*/
+    MKAVL_RC_E_EOOSYNC,
     /** Max return code for bounds testing */
     MKAVL_RC_E_MAX,
 } mkavl_rc_e;
