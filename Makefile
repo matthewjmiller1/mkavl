@@ -52,8 +52,6 @@ $(AVL_DIR)/$(ODIR)/%.o: $(AVL_DIR)/%.c $(AVL_DEPS)
 
 $(LDIR)/$(LIB_GCC_NAME): $(OBJ) $(AVL_OBJ)
 	$(CC) -shared -Wl,-soname,$(LDIR)/$(LIB_LD_NAME) -o $@ $^
-	cd $(LDIR); $(LN) -sf $(LIB_GCC_NAME) $(LIB_LD_NAME); \
-            $(LN) -sf $(LIB_GCC_NAME) $(LIB_NAME); \
 
 $(LDIR)/$(LIB_LD_NAME): $(LDIR)/$(LIB_GCC_NAME)
 	cd $(LDIR); $(LN) -sf $(LIB_GCC_NAME) $(LIB_LD_NAME)
