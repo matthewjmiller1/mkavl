@@ -36,13 +36,43 @@
  */
 #define NELEMS(x) (sizeof(x) / sizeof(x[0]))
 
+/**
+ * Magic number indicating a pointer is valid for sanity checks.
+ */
+#define MKAVL_CTX_MAGIC 0xCAFEBABE
+
+/**
+ * Magic number indicating a pointer is stale for sanity checks.
+ */
+#define MKAVL_CTX_STALE 0xDEADBEEF
+
+typedef struct mkavl_avl_ctx_st_ {
+    uint32_t magic;
+    mkavl_tree_handle tree;
+    size_t key_idx;
+} mkavl_avl_ctx_st;
+
+typedef struct mkavl_avl_tree_st_ {
+    struct avl_table *tree;
+    mkavl_compare_fn compare_fn;
+    mkavl_avl_ctx_st *avl_ctx;
+} mkavl_avl_tree_st;
+
 typedef struct mkavl_tree_st_ {
-    uint8_t dummy;
+    void *context;
+    mkavl_allocator_st allocator;
+    size_t avl_tree_count;
+    mkavl_avl_tree_st *avl_tree_array;
 } mkavl_tree_st;
 
 typedef struct mkavl_iterator_st_ {
     uint8_t dummy;
 } mkavl_iterator_st;
+
+static mkavl_allocator_st mkavl_allocator_default = {
+    malloc,
+    free
+};
 
 /**
  * String representations of the return codes.
@@ -170,13 +200,189 @@ mkavl_lookup_type_e_get_string (mkavl_lookup_type_e type)
 
 }
 
+static void *
+mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
+{
+    // TODO
+}
+
+static void
+mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
+{
+    // TODO
+}
+
+static struct libavl_allocator mkavl_allocator_wrapper = {
+    mkavl_malloc_wrapper,
+    mkavl_free_wrapper
+}
+
+static int
+mkavl_compare_wrapper (const void *avl_a, const *avl_b, void *avl_param)
+{
+    mkavl_avl_ctx_st *avl_ctx;
+    mkavl_compare_fn cmp_fn;
+
+    avl_ctx = (mkavl_avl_ctx_st *) avl_param;
+    if ((NULL == avl_ctx) || (MKAVL_CTX_MAGIC != avl_ctx->magic) ||
+        (NULL == avl_ctx->tree) || 
+        (avl_ctx->key_idx >= avl_ctx->tree->avl_tree_count)) {
+        // TODO
+    }
+
+    cmp_fn = avl_ctx->tree->avl_tree_array[avl_ctx->key_idx].compare_fn;
+
+    return (cmp_fn(avl_a, avl_b, avl_ctx->tree->context));
+}
+
+static mkavl_rc_e
+mkavl_copy_allocator (const mkavl_allocator_st *src,
+                      mkavl_allocator_st *dest)
+{
+    /* Always add a new check here if functions are added. */
+    CT_ASSERT(2 == (sizeof(mkavl_allocator_st)/sizeof(void *)));
+
+    if ((NULL == src) || (NULL == dest)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    dest->malloc_fn = src->malloc_fn;
+    dest->free_fn = src->free_fn;
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
+static mkavl_rc_e
+mkavl_delete_tree (mkavl_tree_st **tree)
+{
+    mkavl_allocator_st local_allocator;
+    mkavl_tree_st *local_tree;
+    uint32_t i;
+    mkavl_rc_e rc;
+
+    if (NULL == tree) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    local_tree = *tree;
+
+    if (NULL == local_tree) {
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    rc = mkavl_copy_allocator(&(local_tree->allocator), &local_allocator);
+    if (mkavl_rc_e_is_notok(rc)) {
+        return (rc);
+    }
+
+    if (NULL != local_tree->avl_tree_array) {
+        for (i = 0; i < local_tree->avl_tree_count; ++i) {
+            if (NULL != local_tree->avl_tree_array[i].tree) { 
+                if (NULL != local_tree->avl_tree_array[i].avl_ctx) {
+                    local_allocator.free_fn(
+                        local_tree->avl_tree_array[i].avl_ctx);
+                }
+                avl_destroy(local_tree->avl_tree_array[i].tree, NULL);
+            }
+        }
+        local_allocator.free_fn(local_tree->avl_tree_array);
+    }
+
+    local_allocator.free_fn(local_tree);
+
+    *tree = NULL;
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
 mkavl_rc_e
 mkavl_new (mkavl_tree_handle *tree_h,
            mkavl_compare_fn *compare_fn_array, 
            size_t compare_fn_array_size, 
            void *context, mkavl_allocator_st *allocator)
 {
-    return (MKAVL_RC_E_SUCCESS);
+    mkavl_allocator_st *local_allocator;
+    mkavl_tree_st *new_tree;
+    mkavl_avl_ctx_st *avl_ctx;
+    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS, err_rc;
+    uint32_t i;
+
+    if ((NULL == tree_h) || (NULL == compare_fn_array) ||
+        (0 == compare_fn_array_size)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *tree_h = NULL;
+
+    local_allocator = 
+        (NULL == allocator) ? &mkavl_default_allocator : allocator;
+
+    new_tree = local_allocator->malloc_fn(sizeof(*new_tree));
+    if (NULL == new_tree) {
+        rc = MKAVL_RC_E_ENOMEM;
+        goto err_exit;
+    }
+
+    new_tree->context = context;
+    rc = mkavl_copy_allocator(local_allocator, &(new_tree->allocator));
+    if (mkavl_rc_e_is_notok(rc)) {
+        goto err_exit;
+    }
+    new_tree->avl_tree_count = array_size;
+    new_tree->avl_tree_array = NULL;
+
+    new_tree->avl_tree_array = 
+        local_allocator->malloc_fn(array_size * 
+                                   sizeof(*(new_tree->avl_tree_array)));
+    if (NULL == new_tree->avl_tree_array) {
+        rc = MKAVL_RC_E_ENOMEM;
+        goto err_exit;
+    }
+
+    for (i = 0; i < array_size; ++i) {
+        new_tree->avl_tree_array[i].tree = NULL;
+        new_tree->avl_tree_array[i].compare_fn = compare_fn_array[i];
+        new_tree->avl_tree_array[i].avl_ctx = NULL;
+    }
+
+    for (i = 0; i < array_size; ++i) {
+        avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx));
+        if (NULL == avl_ctx) {
+            rc = MKAVL_RC_E_ENOMEM;
+            goto err_exit;
+        }
+        avl_ctx->magic = MKAVL_CTX_STALE;
+
+        new_tree->avl_tree_array[i].tree = avl_create(mkavl_compare_wrapper,
+                                                      avl_ctx,
+                                                      mkavl_allocator_wrapper);
+        if (NULL == new_tree->avl_tree_array[i].tree) {
+            rc = MKAVL_RC_E_ENOMEM;
+            goto err_exit;
+        }
+
+        avl_ctx->tree = new_tree->avl_tree_array[i].tree;
+        avl_ctx->key_idx = i;
+        avl_ctx->magic = MKAVL_CTX_MAGIC;
+        new_tree->avl_tree_array[i].avl_ctx = avl_ctx;
+        avl_ctx = NULL;
+    }
+
+    *tree_h = new_tree;
+
+    return (rc);
+
+err_exit:
+
+    if (NULL != new_tree) {
+        err_rc = mkavl_delete_tree(&new_tree);
+        assert(mkavl_rc_e_is_ok(err_rc));
+    }
+
+    if (NULL != avl_ctx) {
+        /* Ownership of this memory hasn't been transferred to a tree yet */
+        local_allocator->free_fn(avl_ctx);
+    }
+
+    return (rc);
 }
 
 mkavl_rc_e
