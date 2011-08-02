@@ -72,6 +72,7 @@ typedef struct mkavl_tree_st_ {
     mkavl_allocator_wrapper_st allocator;
     size_t avl_tree_count;
     mkavl_avl_tree_st *avl_tree_array;
+    uint32_t item_count;
     mkavl_copy_fn copy_fn; 
     mkavl_item_fn item_fn;
 } mkavl_tree_st;
@@ -424,6 +425,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
     new_tree->allocator.magic = MKAVL_CTX_MAGIC;
     new_tree->avl_tree_count = compare_fn_array_size;
     new_tree->avl_tree_array = NULL;
+    new_tree->item_count = 0;
     new_tree->item_fn = NULL;
     new_tree->copy_fn = NULL;
 
@@ -553,6 +555,8 @@ mkavl_add (mkavl_tree_handle tree_h, void *item_to_add,
         }
     }
 
+    ++(tree_h->item_count);
+
     *existing_item = first_item;
 
     return (rc);
@@ -574,6 +578,44 @@ mkavl_rc_e
 mkavl_find (mkavl_tree_handle tree_h, mkavl_find_type_e type,
             size_t key_idx, const void *lookup_item, void **found_item)
 {
+    void *item = NULL;
+
+    if ((NULL == lookup_item) || (NULL == found_item)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (!mkavl_find_type_e_is_valid(type)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (!mkavl_tree_is_valid(tree_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (key_idx >= tree_h->avl_tree_count) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    switch (type) {
+    case MKAVL_FIND_TYPE_E_EQUAL:
+        item = avl_find(tree_h->avl_tree_array[key_idx].tree, lookup_item);
+        break;
+    case MKAVL_FIND_TYPE_E_GT:
+        // TODO
+        break;
+    case MKAVL_FIND_TYPE_E_LT:
+        break;
+    case MKAVL_FIND_TYPE_E_GE:
+        break;
+    case MKAVL_FIND_TYPE_E_LE:
+        break;
+    default:
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *found_item = item;
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
@@ -581,7 +623,47 @@ mkavl_rc_e
 mkavl_remove (mkavl_tree_handle tree_h, const void *item_to_remove,
               void **found_item)
 {
-    return (MKAVL_RC_E_SUCCESS);
+    uint32_t i, err_idx = 0;
+    void *item, *first_item = NULL;
+    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
+
+    if ((NULL == item_to_remove) || (NULL == found_item)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (!mkavl_tree_is_valid(tree_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    for (i = 0; i < tree_h->avl_tree_count; ++i) {
+        item = avl_delete(tree_h->avl_tree_array[i].tree, item_to_remove);
+        if (0 == i) {
+            first_item = item;
+        } else if (first_item != item) {
+            err_idx = i + 1;
+            rc = MKAVL_RC_E_EOOSYNC;
+            goto err_exit;
+        }
+    }
+
+    --(tree_h->item_count);
+
+    *found_item = first_item;
+
+    return (rc);
+
+err_exit:
+
+    for (i = 0; i < err_idx; ++i) {
+        if (NULL != first_item) {
+            /* Attempt to insert all the items we removed */
+            item = avl_insert(tree_h->avl_tree_array[i].tree, first_item);
+            assert(NULL == item);
+        }
+    }
+
+    return (rc);
 }
 
 mkavl_rc_e
@@ -635,24 +717,48 @@ mkavl_remove_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
 }
 
 uint32_t
-mkavl_count (mkavl_tree_handle tree_h, size_t key_idx)
+mkavl_count (mkavl_tree_handle tree_h)
 {
     if (!mkavl_tree_is_valid(tree_h)) {
         return (0);
     }
 
-    if (key_idx >= tree_h->avl_tree_count) {
-        return (0);
-    }
-
-    return (avl_count(tree_h->avl_tree_array[key_idx].tree));
+    return (tree_h->item_count);
 }
 
 mkavl_rc_e
 mkavl_walk (mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
             void *walk_context)
 {
-    return (MKAVL_RC_E_SUCCESS);
+    void *item;
+    bool stop_walk = false;
+    struct avl_traverser avl_t = {0};
+    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
+
+    if (NULL == cb_fn) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (!mkavl_tree_is_valid(tree_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    /* 
+     * Just randomly select the first tree as the one on which to iterate.
+     * All trees should have the same set of data, just in different orders.
+     */
+    avl_t_init(&avl_t, tree_h->avl_tree_array[0].tree);
+
+    item = avl_t_first(&avl_t, tree_h->avl_tree_array[0].tree);
+    while ((NULL != item) && !stop_walk) {
+        rc = cb_fn(item, tree_h->context, walk_context, &stop_walk);
+        if (mkavl_rc_e_is_notok(rc)) {
+            break;
+        }
+        item = avl_t_next(&avl_t);
+    }
+
+    return (rc);
 }
 
 mkavl_rc_e

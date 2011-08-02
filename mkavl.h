@@ -187,7 +187,7 @@ mkavl_remove_key_idx(mkavl_tree_handle tree_h, size_t key_idx,
 /* AVL utility functions */
 
 extern uint32_t
-mkavl_count(mkavl_tree_handle tree_h, size_t key_idx);
+mkavl_count(mkavl_tree_handle tree_h);
 
 extern mkavl_rc_e
 mkavl_walk(mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
