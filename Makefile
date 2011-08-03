@@ -69,7 +69,7 @@ all: lib_symlinks $(LDIR)/$(STATIC_LIB_NAME)
 .PHONY: clean tar doc
 
 clean:
-	rm -f test_$(NAME) $(ODIR)/*.o *~ core 
+	rm -f $(ODIR)/*.o $(AVL_DIR)/$(ODIR)/*.o *~ core 
 
 doc:
 	doxygen
