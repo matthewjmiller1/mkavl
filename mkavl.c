@@ -57,7 +57,7 @@
 
 typedef struct mkavl_avl_ctx_st_ {
     uint32_t magic;
-    mkavl_tree_handle tree;
+    mkavl_tree_handle tree_h;
     size_t key_idx;
 } mkavl_avl_ctx_st;
 
@@ -86,7 +86,9 @@ typedef struct mkavl_tree_st_ {
 } mkavl_tree_st;
 
 typedef struct mkavl_iterator_st_ {
-    uint8_t dummy;
+    struct avl_traverser avl_t;
+    mkavl_tree_handle tree_h;
+    size_t key_idx;
 } mkavl_iterator_st;
 
 /**
@@ -243,11 +245,11 @@ mkavl_avl_ctx_is_valid (mkavl_avl_ctx_st *avl_ctx)
         is_valid = false;
     }
 
-    if (is_valid && (NULL == avl_ctx->tree)) {
+    if (is_valid && (NULL == avl_ctx->tree_h)) {
         is_valid = false;
     }
 
-    if (is_valid && (avl_ctx->key_idx >= avl_ctx->tree->avl_tree_count)) {
+    if (is_valid && (avl_ctx->key_idx >= avl_ctx->tree_h->avl_tree_count)) {
         is_valid = false;
     }
 
@@ -323,10 +325,10 @@ mkavl_compare_wrapper (const void *avl_a, const void *avl_b, void *avl_param)
     avl_ctx = (mkavl_avl_ctx_st *) avl_param;
     mkavl_assert_abort(mkavl_avl_ctx_is_valid(avl_ctx));
 
-    cmp_fn = avl_ctx->tree->avl_tree_array[avl_ctx->key_idx].compare_fn;
+    cmp_fn = avl_ctx->tree_h->avl_tree_array[avl_ctx->key_idx].compare_fn;
     mkavl_assert_abort(NULL != cmp_fn);
 
-    return (cmp_fn(avl_a, avl_b, avl_ctx->tree->context));
+    return (cmp_fn(avl_a, avl_b, avl_ctx->tree_h->context));
 }
 
 static void *
@@ -338,10 +340,10 @@ mkavl_copy_wrapper (void *avl_item, void *avl_param)
     avl_ctx = (mkavl_avl_ctx_st *) avl_param;
     mkavl_assert_abort(mkavl_avl_ctx_is_valid(avl_ctx));
 
-    copy_fn = avl_ctx->tree->copy_fn;
+    copy_fn = avl_ctx->tree_h->copy_fn;
     mkavl_assert_abort(NULL != copy_fn);
 
-    return (copy_fn(avl_item, avl_ctx->tree->context));
+    return (copy_fn(avl_item, avl_ctx->tree_h->context));
 }
 
 static mkavl_rc_e
@@ -425,6 +427,27 @@ mkavl_tree_is_valid (mkavl_tree_handle tree_h)
     return (is_valid);
 }
 
+static bool
+mkavl_iterator_is_valid (mkavl_iterator_handle iterator_h)
+{
+    bool is_valid = true;
+
+    if (is_valid && (NULL == iterator_h)) {
+        is_valid = false;
+    }
+
+    if (is_valid && (!mkavl_tree_is_valid(iterator_h->tree_h))) {
+        is_valid = false;
+    }
+
+    if (is_valid && 
+        (iterator_h->key_idx >= iterator_h->tree_h->avl_tree_count)) {
+        is_valid = false;
+    }
+
+    return (is_valid);
+}
+
 mkavl_rc_e
 mkavl_new (mkavl_tree_handle *tree_h,
            mkavl_compare_fn *compare_fn_array, 
@@ -432,7 +455,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
            void *context, mkavl_allocator_st *allocator)
 {
     mkavl_allocator_st *local_allocator;
-    mkavl_tree_handle new_tree_h;
+    mkavl_tree_handle local_tree_h;
     mkavl_avl_ctx_st *avl_ctx;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS, err_rc;
     uint32_t i;
@@ -446,42 +469,42 @@ mkavl_new (mkavl_tree_handle *tree_h,
     local_allocator = 
         (NULL == allocator) ? &mkavl_allocator_default : allocator;
 
-    new_tree_h = local_allocator->malloc_fn(sizeof(*new_tree_h));
-    if (NULL == new_tree_h) {
+    local_tree_h = local_allocator->malloc_fn(sizeof(*local_tree_h));
+    if (NULL == local_tree_h) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
     }
 
-    new_tree_h->context = context;
-    memcpy(&(new_tree_h->allocator.avl_allocator), &mkavl_allocator_wrapper,
-           sizeof(new_tree_h->allocator.avl_allocator));
-    memcpy(&(new_tree_h->allocator.mkavl_allocator), &local_allocator,
-           sizeof(new_tree_h->allocator));
-    new_tree_h->allocator.magic = MKAVL_CTX_MAGIC;
-    new_tree_h->avl_tree_count = compare_fn_array_count;
-    new_tree_h->avl_tree_array = NULL;
-    new_tree_h->item_count = 0;
-    new_tree_h->copy_fn = NULL;
+    local_tree_h->context = context;
+    memcpy(&(local_tree_h->allocator.avl_allocator), &mkavl_allocator_wrapper,
+           sizeof(local_tree_h->allocator.avl_allocator));
+    memcpy(&(local_tree_h->allocator.mkavl_allocator), &local_allocator,
+           sizeof(local_tree_h->allocator));
+    local_tree_h->allocator.magic = MKAVL_CTX_MAGIC;
+    local_tree_h->avl_tree_count = compare_fn_array_count;
+    local_tree_h->avl_tree_array = NULL;
+    local_tree_h->item_count = 0;
+    local_tree_h->copy_fn = NULL;
 
-    new_tree_h->avl_tree_array = 
-        local_allocator->malloc_fn(new_tree_h->avl_tree_count * 
-                                   sizeof(*(new_tree_h->avl_tree_array)));
-    if (NULL == new_tree_h->avl_tree_array) {
+    local_tree_h->avl_tree_array = 
+        local_allocator->malloc_fn(local_tree_h->avl_tree_count * 
+                                   sizeof(*(local_tree_h->avl_tree_array)));
+    if (NULL == local_tree_h->avl_tree_array) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
     }
 
-    for (i = 0; i < new_tree_h->avl_tree_count; ++i) {
-        new_tree_h->avl_tree_array[i].tree = NULL;
-        new_tree_h->avl_tree_array[i].compare_fn = compare_fn_array[i];
-        if (NULL == new_tree_h->avl_tree_array[i].compare_fn) {
+    for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
+        local_tree_h->avl_tree_array[i].tree = NULL;
+        local_tree_h->avl_tree_array[i].compare_fn = compare_fn_array[i];
+        if (NULL == local_tree_h->avl_tree_array[i].compare_fn) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
         }
-        new_tree_h->avl_tree_array[i].avl_ctx = NULL;
+        local_tree_h->avl_tree_array[i].avl_ctx = NULL;
     }
 
-    for (i = 0; i < new_tree_h->avl_tree_count; ++i) {
+    for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
         avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx));
         if (NULL == avl_ctx) {
             rc = MKAVL_RC_E_ENOMEM;
@@ -489,34 +512,34 @@ mkavl_new (mkavl_tree_handle *tree_h,
         }
         avl_ctx->magic = MKAVL_CTX_STALE;
 
-        new_tree_h->avl_tree_array[i].tree = 
+        local_tree_h->avl_tree_array[i].tree = 
             avl_create(mkavl_compare_wrapper, avl_ctx,
-                       &(new_tree_h->allocator.avl_allocator));
-        if (NULL == new_tree_h->avl_tree_array[i].tree) {
+                       &(local_tree_h->allocator.avl_allocator));
+        if (NULL == local_tree_h->avl_tree_array[i].tree) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
         }
 
-        avl_ctx->tree = new_tree_h;
+        avl_ctx->tree_h = local_tree_h;
         avl_ctx->key_idx = i;
         avl_ctx->magic = MKAVL_CTX_MAGIC;
-        new_tree_h->avl_tree_array[i].avl_ctx = avl_ctx;
+        local_tree_h->avl_tree_array[i].avl_ctx = avl_ctx;
         avl_ctx = NULL;
     }
 
-    if (!mkavl_tree_is_valid(new_tree_h)) {
+    if (!mkavl_tree_is_valid(local_tree_h)) {
         rc = MKAVL_RC_E_EINVAL;
         goto err_exit;
     }
 
-    *tree_h = new_tree_h;
+    *tree_h = local_tree_h;
 
     return (rc);
 
 err_exit:
 
-    if (NULL != new_tree_h) {
-        err_rc = mkavl_delete_tree(&new_tree_h);
+    if (NULL != local_tree_h) {
+        err_rc = mkavl_delete_tree(&local_tree_h);
         mkavl_assert_abort(mkavl_rc_e_is_ok(err_rc));
     }
 
@@ -936,28 +959,100 @@ mkavl_rc_e
 mkavl_iter_new (mkavl_iterator_handle *iterator_h, mkavl_tree_handle tree_h,
                 size_t key_idx)
 {
-    // TODO
+    mkavl_iterator_handle local_iter_h;
+    mkavl_rc_e rc;
+
+    if ((NULL == iterator_h) || !mkavl_tree_is_valid(tree_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (key_idx >= tree_h->avl_tree_count) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *iterator_h = NULL;
+
+    local_iter_h =
+        tree_h->allocator.mkavl_allocator.malloc_fn(sizeof(*local_iter_h));
+    if (NULL == local_iter_h) {
+        rc = MKAVL_RC_E_ENOMEM;
+        goto err_exit;
+    }
+    local_iter_h->tree_h = tree_h;
+    local_iter_h->key_idx = key_idx;
+    memset(&(local_iter_h->avl_t), 0, sizeof(local_iter_h->avl_t));
+
+    avl_t_init(&(local_iter_h->avl_t), tree_h->avl_tree_array[key_idx].tree);
+
+    *iterator_h = local_iter_h;
+
     return (MKAVL_RC_E_SUCCESS);
+
+err_exit:
+
+    if (NULL != local_iter_h) {
+        tree_h->allocator.mkavl_allocator.free_fn(local_iter_h);
+        local_iter_h = NULL;
+    }
+
+    return (rc);
 }
 
 mkavl_rc_e
 mkavl_iter_delete (mkavl_iterator_handle *iterator_h)
 {
-    // TODO
+    mkavl_iterator_handle local_iter_h;
+    mkavl_free_fn free_fn;
+
+    if (NULL == iterator_h) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    local_iter_h = *iterator_h;
+
+    if (!mkavl_iterator_is_valid(local_iter_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    free_fn = local_iter_h->tree_h->allocator.mkavl_allocator.free_fn;
+    free_fn(local_iter_h);
+
+    *iterator_h = NULL;
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_first (mkavl_iterator_handle iterator_h, void **item)
 {
-    // TODO
+    if (NULL == item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *item = avl_t_first(&(iterator_h->avl_t),
+                iterator_h->tree_h->avl_tree_array[iterator_h->key_idx].tree);
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_last (mkavl_iterator_handle iterator_h, void **item)
 {
-    // TODO
+    if (NULL == item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *item = avl_t_last(&(iterator_h->avl_t),
+                iterator_h->tree_h->avl_tree_array[iterator_h->key_idx].tree);
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
@@ -965,27 +1060,70 @@ mkavl_rc_e
 mkavl_iter_find (mkavl_iterator_handle iterator_h, void *lookup_item,
                  void **found_item)
 {
-    // TODO
+    if ((NULL == lookup_item) || (NULL == found_item)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *found_item = 
+        avl_t_find(&(iterator_h->avl_t),
+                   iterator_h->tree_h->avl_tree_array[iterator_h->key_idx].tree,
+                   lookup_item);
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_next (mkavl_iterator_handle iterator_h, void **item)
 {
-    // TODO
+    if (NULL == item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *item = avl_t_next(&(iterator_h->avl_t));
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_prev (mkavl_iterator_handle iterator_h, void **item)
 {
-    // TODO
+    if (NULL == item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *item = avl_t_prev(&(iterator_h->avl_t));
+
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_cur (mkavl_iterator_handle iterator_h, void **item)
 {
-    // TODO
+    if (NULL == item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *item = NULL;
+
+    if (!mkavl_iterator_is_valid(iterator_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    *item = avl_t_cur(&(iterator_h->avl_t));
+
     return (MKAVL_RC_E_SUCCESS);
 }
