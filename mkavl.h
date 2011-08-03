@@ -101,7 +101,7 @@ typedef int32_t
  * Prototype for a function that is applied to every element for various
  * operations.
  */
-typedef void
+typedef mkavl_rc_e
 (*mkavl_item_fn)(void *item, void *context);
 
 /**
