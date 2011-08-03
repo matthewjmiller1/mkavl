@@ -37,6 +37,11 @@
 #define NELEMS(x) (sizeof(x) / sizeof(x[0]))
 
 /**
+ * Sanity value to make sure we don't get stuck in an infinite loop.
+ */
+#define RUNAWAY_SANITY 100000
+
+/**
  * Magic number indicating a pointer is valid for sanity checks.
  */
 #define MKAVL_CTX_MAGIC 0xCAFEBABE
@@ -498,6 +503,7 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
     mkavl_tree_st *local_tree;
     void *item, *item_to_delete;
     uint32_t i;
+    uint32_t runaway_counter = 0;
     struct avl_traverser avl_t = {0};
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
     mkavl_rc_e retval = MKAVL_RC_E_SUCCESS;
@@ -516,8 +522,16 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
      * All trees should have the same set of data, just in different orders.
      */
     avl_t_init(&avl_t, local_tree->avl_tree_array[0].tree);
+    /* 
+     * May be more efficient to just pull the root out each time instead
+     * of traversing to get the first.
+     */
     item_to_delete = avl_t_first(&avl_t, local_tree->avl_tree_array[0].tree);
     while (NULL != item_to_delete) {
+        if (runaway_counter > RUNAWAY_SANITY) {
+            abort();
+        }
+
         for (i = 0; i < local_tree->avl_tree_count; ++i) {
             item = avl_delete(local_tree->avl_tree_array[i].tree,
                               item_to_delete);
@@ -535,7 +549,11 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
         }
 
         --(local_tree->item_count);
-        item_to_delete = avl_t_next(&avl_t);
+
+        /* We deleted the last item, so there should be a new first */
+        item_to_delete = avl_t_first(&avl_t,
+                                     local_tree->avl_tree_array[0].tree);
+        ++runaway_counter;
     }
 
     rc = mkavl_delete_tree(tree_h);
@@ -552,6 +570,7 @@ mkavl_copy (mkavl_tree_handle source_tree_h, mkavl_tree_handle *new_tree_h,
             mkavl_copy_fn copy_fn, mkavl_item_fn item_fn, 
             mkavl_allocator_st *allocator)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
@@ -797,24 +816,28 @@ mkavl_rc_e
 mkavl_iter_new (mkavl_iterator_handle *iterator_h, mkavl_tree_handle tree_h,
                 size_t key_idx)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_delete (mkavl_iterator_handle *iterator_h)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_first (mkavl_iterator_handle iterator_h, void **item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_last (mkavl_iterator_handle iterator_h, void **item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
@@ -822,23 +845,27 @@ mkavl_rc_e
 mkavl_iter_find (mkavl_iterator_handle iterator_h, void *lookup_item,
                  void **found_item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_next (mkavl_iterator_handle iterator_h, void **item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_prev (mkavl_iterator_handle iterator_h, void **item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
 
 mkavl_rc_e
 mkavl_iter_cur (mkavl_iterator_handle iterator_h, void **item)
 {
+    // TODO
     return (MKAVL_RC_E_SUCCESS);
 }
