@@ -768,11 +768,174 @@ err_exit:
     return (rc);
 }
 
+static inline mkavl_rc_e
+mkavl_avl_end_item (const struct avl_node *node, void **found_item,
+                    uint8_t side)
+{
+    const struct avl_node *cur_node;
+
+    if (NULL == found_item) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (side >= 2) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (NULL == node) {
+        return (MKAVL_RC_E_SUCCESS);
+    }
+    cur_node = node;
+
+    while (NULL != cur_node->avl_link[side]) {
+        cur_node = cur_node->avl_link[side];
+    }
+    *found_item = cur_node->avl_data;
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
+static mkavl_rc_e
+mkavl_avl_first (const struct avl_node *node, void **found_item)
+{
+    return (mkavl_avl_end_item(node, found_item, 0));
+}
+
+static mkavl_rc_e
+mkavl_avl_last (const struct avl_node *node, void **found_item)
+{
+    return (mkavl_avl_end_item(node, found_item, 1));
+}
+
+static mkavl_rc_e
+mkavl_find_avl_lt (const struct avl_table *avl_tree,
+                   const struct avl_node *node,
+                   bool find_equal_to, const void *lookup_item, 
+                   void **found_item)
+{
+    int32_t cmp_rc;
+    mkavl_rc_e rc;
+
+    if ((NULL == found_item) || (NULL == lookup_item) ||
+        (NULL == avl_tree)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (NULL == node) {
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    cmp_rc = avl_tree->avl_compare(node->avl_data, lookup_item,
+                                   avl_tree->avl_param);
+
+    if (cmp_rc < 0) {
+        /* Current node is less than what we're searching for */
+        rc = mkavl_find_avl_lt(avl_tree, node->avl_link[1], find_equal_to,
+                               lookup_item, found_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
+
+        if (NULL == *found_item) {
+            /* 
+             * There is nothing smaller in the right subtree, so the current
+             * node is the winner.  Otherwise, return what was found in the
+             * right subtree.
+             */
+            *found_item = node->avl_data;
+        }
+
+        return (MKAVL_RC_E_SUCCESS);
+    } else if (cmp_rc > 0) {
+        /* Current node is greater than what we're searching for */
+        return (mkavl_find_avl_lt(avl_tree, node->avl_link[0], find_equal_to,
+                                  lookup_item, found_item));
+    }
+
+    /* Current node is equal to what we're searching for */
+
+    if (find_equal_to) {
+        /* We're done if we can stop on equality */
+        *found_item = node->avl_data;
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    /* 
+     * If we can't stop on equality, then get the biggest item in the left
+     * subtree.
+     */
+    return (mkavl_avl_last(node->avl_link[0], found_item));
+}
+
+static mkavl_rc_e
+mkavl_find_avl_gt (const struct avl_table *avl_tree,
+                   const struct avl_node *node,
+                   bool find_equal_to, const void *lookup_item, 
+                   void **found_item)
+{
+    int32_t cmp_rc;
+    mkavl_rc_e rc;
+
+    if ((NULL == found_item) || (NULL == lookup_item) ||
+        (NULL == avl_tree)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *found_item = NULL;
+
+    if (NULL == node) {
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    cmp_rc = avl_tree->avl_compare(node->avl_data, lookup_item,
+                                   avl_tree->avl_param);
+
+    if (cmp_rc < 0) {
+        /* Current node is less than what we're searching for */
+        return (mkavl_find_avl_gt(avl_tree, node->avl_link[1], find_equal_to,
+                                  lookup_item, found_item));
+    } else if (cmp_rc > 0) {
+        /* Current node is greater than what we're searching for */
+        rc = mkavl_find_avl_gt(avl_tree, node->avl_link[0], find_equal_to,
+                               lookup_item, found_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
+
+        if (NULL == *found_item) {
+            /* 
+             * There is nothing bigger in the left subtree, so the current node
+             * is the winner.  Otherwise, return what was found in the left
+             * subtree.
+             */
+            *found_item = node->avl_data;
+        }
+
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    /* Current node is equal to what we're searching for */
+
+    if (find_equal_to) {
+        /* We're done if we can stop on equality */
+        *found_item = node->avl_data;
+        return (MKAVL_RC_E_SUCCESS);
+    }
+
+    /* 
+     * If we can't stop on equality, then get the smallest item in the right
+     * subtree.
+     */
+    return (mkavl_avl_first(node->avl_link[1], found_item));
+}
+
 mkavl_rc_e
 mkavl_find (mkavl_tree_handle tree_h, mkavl_find_type_e type,
             size_t key_idx, const void *lookup_item, void **found_item)
 {
     void *item = NULL;
+    mkavl_rc_e rc;
 
     if ((NULL == lookup_item) || (NULL == found_item)) {
         return (MKAVL_RC_E_EINVAL);
@@ -796,13 +959,36 @@ mkavl_find (mkavl_tree_handle tree_h, mkavl_find_type_e type,
         item = avl_find(tree_h->avl_tree_array[key_idx].tree, lookup_item);
         break;
     case MKAVL_FIND_TYPE_E_GT:
-        // TODO
-        break;
-    case MKAVL_FIND_TYPE_E_LT:
+        rc = mkavl_find_avl_gt(tree_h->avl_tree_array[key_idx].tree,
+                               tree_h->avl_tree_array[key_idx].tree->avl_root,
+                               false, lookup_item, &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
         break;
     case MKAVL_FIND_TYPE_E_GE:
+        rc = mkavl_find_avl_gt(tree_h->avl_tree_array[key_idx].tree,
+                               tree_h->avl_tree_array[key_idx].tree->avl_root,
+                               true, lookup_item, &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
+        break;
+    case MKAVL_FIND_TYPE_E_LT:
+        rc = mkavl_find_avl_lt(tree_h->avl_tree_array[key_idx].tree,
+                               tree_h->avl_tree_array[key_idx].tree->avl_root,
+                               false, lookup_item, &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
         break;
     case MKAVL_FIND_TYPE_E_LE:
+        rc = mkavl_find_avl_lt(tree_h->avl_tree_array[key_idx].tree,
+                               tree_h->avl_tree_array[key_idx].tree->avl_root,
+                               true, lookup_item, &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            return (rc);
+        }
         break;
     default:
         return (MKAVL_RC_E_EINVAL);
