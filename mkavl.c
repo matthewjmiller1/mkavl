@@ -29,17 +29,21 @@
  * Compile time assert macro from:
  * http://www.pixelbeat.org/programming/gcc/static_assert.html 
  */
+#ifndef CT_ASSERT
 #define CT_ASSERT(e) extern char (*CT_ASSERT(void)) [sizeof(char[1 - 2*!(e)])]
+#endif
 
 /**
  * Determine the number of elements in an array.
  */
+#ifndef NELEMS
 #define NELEMS(x) (sizeof(x) / sizeof(x[0]))
+#endif
 
 /**
  * Sanity value to make sure we don't get stuck in an infinite loop.
  */
-#define RUNAWAY_SANITY 100000
+#define MKAVL_RUNAWAY_SANITY 100000
 
 /**
  * Magic number indicating a pointer is valid for sanity checks.
@@ -78,11 +82,27 @@ typedef struct mkavl_tree_st_ {
     size_t avl_tree_count;
     mkavl_avl_tree_st *avl_tree_array;
     uint32_t item_count;
+    mkavl_copy_fn copy_fn;
 } mkavl_tree_st;
 
 typedef struct mkavl_iterator_st_ {
     uint8_t dummy;
 } mkavl_iterator_st;
+
+/**
+ * Assert utility to crash (via abort()) if the condition is not met regardless
+ * of whether NDEBUG is defined.  E.g., if we hit an error condition where the
+ * data structures are irreversibly out of sync.
+ *
+ * @param condition The condition for which a crash will happen if false.
+ */
+static inline void
+mkavl_assert_abort (bool condition)
+{
+    if (!condition) {
+        abort();
+    }
+}
 
 /**
  * String representations of the return codes.
@@ -211,6 +231,30 @@ mkavl_find_type_e_get_string (mkavl_find_type_e type)
 }
 
 static bool
+mkavl_avl_ctx_is_valid (mkavl_avl_ctx_st *avl_ctx)
+{
+    bool is_valid = true;
+
+    if (is_valid && (NULL == avl_ctx)) {
+        is_valid = false;
+    }
+
+    if (is_valid && (MKAVL_CTX_MAGIC != avl_ctx->magic)) {
+        is_valid = false;
+    }
+
+    if (is_valid && (NULL == avl_ctx->tree)) {
+        is_valid = false;
+    }
+
+    if (is_valid && (avl_ctx->key_idx >= avl_ctx->tree->avl_tree_count)) {
+        is_valid = false;
+    }
+
+    return (is_valid);
+}
+
+static bool
 mkavl_allocator_wrapper_is_valid (mkavl_allocator_wrapper_st *allocator)
 {
     bool is_valid = true;
@@ -277,79 +321,67 @@ mkavl_compare_wrapper (const void *avl_a, const void *avl_b, void *avl_param)
     mkavl_compare_fn cmp_fn;
 
     avl_ctx = (mkavl_avl_ctx_st *) avl_param;
-    if ((NULL == avl_ctx) || (MKAVL_CTX_MAGIC != avl_ctx->magic) ||
-        (NULL == avl_ctx->tree) || 
-        (avl_ctx->key_idx >= avl_ctx->tree->avl_tree_count)) {
-        abort();
-    }
+    mkavl_assert_abort(mkavl_avl_ctx_is_valid(avl_ctx));
 
     cmp_fn = avl_ctx->tree->avl_tree_array[avl_ctx->key_idx].compare_fn;
+    mkavl_assert_abort(NULL != cmp_fn);
 
     return (cmp_fn(avl_a, avl_b, avl_ctx->tree->context));
 }
 
+static void *
+mkavl_copy_wrapper (void *avl_item, void *avl_param)
+{
+    mkavl_avl_ctx_st *avl_ctx;
+    mkavl_copy_fn copy_fn;
+
+    avl_ctx = (mkavl_avl_ctx_st *) avl_param;
+    mkavl_assert_abort(mkavl_avl_ctx_is_valid(avl_ctx));
+
+    copy_fn = avl_ctx->tree->copy_fn;
+    mkavl_assert_abort(NULL != copy_fn);
+
+    return (copy_fn(avl_item, avl_ctx->tree->context));
+}
+
 static mkavl_rc_e
-mkavl_delete_tree (mkavl_tree_st **tree)
+mkavl_delete_tree (mkavl_tree_handle *tree_h)
 {
     mkavl_allocator_st local_allocator;
-    mkavl_tree_st *local_tree;
+    mkavl_tree_handle local_tree_h;
     uint32_t i;
 
-    if (NULL == tree) {
+    if (NULL == tree_h) {
         return (MKAVL_RC_E_EINVAL);
     }
-    local_tree = *tree;
+    local_tree_h = *tree_h;
 
-    memcpy(&local_allocator, &(local_tree->allocator.mkavl_allocator),
+    memcpy(&local_allocator, &(local_tree_h->allocator.mkavl_allocator),
            sizeof(local_allocator));
 
-    if (NULL == local_tree) {
+    if (NULL == local_tree_h) {
         return (MKAVL_RC_E_SUCCESS);
     }
 
-    local_tree->allocator.magic = MKAVL_CTX_STALE;
-    if (NULL != local_tree->avl_tree_array) {
-        for (i = 0; i < local_tree->avl_tree_count; ++i) {
-            if (NULL != local_tree->avl_tree_array[i].tree) { 
-                if (NULL != local_tree->avl_tree_array[i].avl_ctx) {
+    local_tree_h->allocator.magic = MKAVL_CTX_STALE;
+    if (NULL != local_tree_h->avl_tree_array) {
+        for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
+            if (NULL != local_tree_h->avl_tree_array[i].tree) { 
+                if (NULL != local_tree_h->avl_tree_array[i].avl_ctx) {
                     local_allocator.free_fn(
-                        local_tree->avl_tree_array[i].avl_ctx);
+                        local_tree_h->avl_tree_array[i].avl_ctx);
                 }
-                avl_destroy(local_tree->avl_tree_array[i].tree, NULL);
+                avl_destroy(local_tree_h->avl_tree_array[i].tree, NULL);
             }
         }
-        local_allocator.free_fn(local_tree->avl_tree_array);
+        local_allocator.free_fn(local_tree_h->avl_tree_array);
     }
 
-    local_allocator.free_fn(local_tree);
+    local_allocator.free_fn(local_tree_h);
 
-    *tree = NULL;
+    *tree_h = NULL;
 
     return (MKAVL_RC_E_SUCCESS);
-}
-
-static bool
-mkavl_avl_ctx_is_valid (mkavl_avl_ctx_st *avl_ctx)
-{
-    bool is_valid = true;
-
-    if (is_valid && (NULL == avl_ctx)) {
-        is_valid = false;
-    }
-
-    if (is_valid && (MKAVL_CTX_MAGIC != avl_ctx->magic)) {
-        is_valid = false;
-    }
-
-    if (is_valid && (NULL == avl_ctx->tree)) {
-        is_valid = false;
-    }
-
-    if (is_valid && (avl_ctx->key_idx >= avl_ctx->tree->avl_tree_count)) {
-        is_valid = false;
-    }
-
-    return (is_valid);
 }
 
 static bool
@@ -396,17 +428,17 @@ mkavl_tree_is_valid (mkavl_tree_handle tree_h)
 mkavl_rc_e
 mkavl_new (mkavl_tree_handle *tree_h,
            mkavl_compare_fn *compare_fn_array, 
-           size_t compare_fn_array_size, 
+           size_t compare_fn_array_count, 
            void *context, mkavl_allocator_st *allocator)
 {
     mkavl_allocator_st *local_allocator;
-    mkavl_tree_st *new_tree;
+    mkavl_tree_handle new_tree_h;
     mkavl_avl_ctx_st *avl_ctx;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS, err_rc;
     uint32_t i;
 
     if ((NULL == tree_h) || (NULL == compare_fn_array) ||
-        (0 == compare_fn_array_size)) {
+        (0 == compare_fn_array_count)) {
         return (MKAVL_RC_E_EINVAL);
     }
     *tree_h = NULL;
@@ -414,41 +446,42 @@ mkavl_new (mkavl_tree_handle *tree_h,
     local_allocator = 
         (NULL == allocator) ? &mkavl_allocator_default : allocator;
 
-    new_tree = local_allocator->malloc_fn(sizeof(*new_tree));
-    if (NULL == new_tree) {
+    new_tree_h = local_allocator->malloc_fn(sizeof(*new_tree_h));
+    if (NULL == new_tree_h) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
     }
 
-    new_tree->context = context;
-    memcpy(&(new_tree->allocator.avl_allocator), &mkavl_allocator_wrapper,
-           sizeof(new_tree->allocator.avl_allocator));
-    memcpy(&(new_tree->allocator.mkavl_allocator), &local_allocator,
-           sizeof(new_tree->allocator));
-    new_tree->allocator.magic = MKAVL_CTX_MAGIC;
-    new_tree->avl_tree_count = compare_fn_array_size;
-    new_tree->avl_tree_array = NULL;
-    new_tree->item_count = 0;
+    new_tree_h->context = context;
+    memcpy(&(new_tree_h->allocator.avl_allocator), &mkavl_allocator_wrapper,
+           sizeof(new_tree_h->allocator.avl_allocator));
+    memcpy(&(new_tree_h->allocator.mkavl_allocator), &local_allocator,
+           sizeof(new_tree_h->allocator));
+    new_tree_h->allocator.magic = MKAVL_CTX_MAGIC;
+    new_tree_h->avl_tree_count = compare_fn_array_count;
+    new_tree_h->avl_tree_array = NULL;
+    new_tree_h->item_count = 0;
+    new_tree_h->copy_fn = NULL;
 
-    new_tree->avl_tree_array = 
-        local_allocator->malloc_fn(new_tree->avl_tree_count * 
-                                   sizeof(*(new_tree->avl_tree_array)));
-    if (NULL == new_tree->avl_tree_array) {
+    new_tree_h->avl_tree_array = 
+        local_allocator->malloc_fn(new_tree_h->avl_tree_count * 
+                                   sizeof(*(new_tree_h->avl_tree_array)));
+    if (NULL == new_tree_h->avl_tree_array) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
     }
 
-    for (i = 0; i < new_tree->avl_tree_count; ++i) {
-        new_tree->avl_tree_array[i].tree = NULL;
-        new_tree->avl_tree_array[i].compare_fn = compare_fn_array[i];
-        if (NULL == new_tree->avl_tree_array[i].compare_fn) {
+    for (i = 0; i < new_tree_h->avl_tree_count; ++i) {
+        new_tree_h->avl_tree_array[i].tree = NULL;
+        new_tree_h->avl_tree_array[i].compare_fn = compare_fn_array[i];
+        if (NULL == new_tree_h->avl_tree_array[i].compare_fn) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
         }
-        new_tree->avl_tree_array[i].avl_ctx = NULL;
+        new_tree_h->avl_tree_array[i].avl_ctx = NULL;
     }
 
-    for (i = 0; i < new_tree->avl_tree_count; ++i) {
+    for (i = 0; i < new_tree_h->avl_tree_count; ++i) {
         avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx));
         if (NULL == avl_ctx) {
             rc = MKAVL_RC_E_ENOMEM;
@@ -456,37 +489,35 @@ mkavl_new (mkavl_tree_handle *tree_h,
         }
         avl_ctx->magic = MKAVL_CTX_STALE;
 
-        new_tree->avl_tree_array[i].tree = 
+        new_tree_h->avl_tree_array[i].tree = 
             avl_create(mkavl_compare_wrapper, avl_ctx,
-                       &(new_tree->allocator.avl_allocator));
-        if (NULL == new_tree->avl_tree_array[i].tree) {
+                       &(new_tree_h->allocator.avl_allocator));
+        if (NULL == new_tree_h->avl_tree_array[i].tree) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
         }
 
-        avl_ctx->tree = new_tree;
+        avl_ctx->tree = new_tree_h;
         avl_ctx->key_idx = i;
         avl_ctx->magic = MKAVL_CTX_MAGIC;
-        new_tree->avl_tree_array[i].avl_ctx = avl_ctx;
+        new_tree_h->avl_tree_array[i].avl_ctx = avl_ctx;
         avl_ctx = NULL;
     }
 
-    if (!mkavl_tree_is_valid(new_tree)) {
+    if (!mkavl_tree_is_valid(new_tree_h)) {
         rc = MKAVL_RC_E_EINVAL;
         goto err_exit;
     }
 
-    *tree_h = new_tree;
+    *tree_h = new_tree_h;
 
     return (rc);
 
 err_exit:
 
-    if (NULL != new_tree) {
-        err_rc = mkavl_delete_tree(&new_tree);
-        if (mkavl_rc_e_is_notok(err_rc)) {
-            abort();
-        }
+    if (NULL != new_tree_h) {
+        err_rc = mkavl_delete_tree(&new_tree_h);
+        mkavl_assert_abort(mkavl_rc_e_is_ok(err_rc));
     }
 
     if (NULL != avl_ctx) {
@@ -500,9 +531,9 @@ err_exit:
 mkavl_rc_e
 mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
 {
-    mkavl_tree_st *local_tree;
+    mkavl_tree_handle local_tree_h;
     void *item, *item_to_delete;
-    uint32_t i;
+    uint32_t i, first_tree_idx;
     uint32_t runaway_counter = 0;
     struct avl_traverser avl_t = {0};
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
@@ -511,9 +542,9 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
     if (NULL == tree_h) {
         return (MKAVL_RC_E_EINVAL);
     }
-    local_tree = *tree_h;
+    local_tree_h = *tree_h;
 
-    if (!mkavl_tree_is_valid(local_tree)) {
+    if (!mkavl_tree_is_valid(local_tree_h)) {
         return (MKAVL_RC_E_EINVAL);
     }
 
@@ -521,57 +552,150 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
      * Just randomly select the first tree as the one on which to iterate.
      * All trees should have the same set of data, just in different orders.
      */
-    avl_t_init(&avl_t, local_tree->avl_tree_array[0].tree);
-    /* 
-     * May be more efficient to just pull the root out each time instead
-     * of traversing to get the first.
-     */
-    item_to_delete = avl_t_first(&avl_t, local_tree->avl_tree_array[0].tree);
-    while (NULL != item_to_delete) {
-        if (runaway_counter > RUNAWAY_SANITY) {
-            abort();
+    first_tree_idx = local_tree_h->avl_tree_count;
+    for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
+        if (NULL != local_tree_h->avl_tree_array[i].tree) {
+            first_tree_idx = i;
+            avl_t_init(&avl_t, 
+                       local_tree_h->avl_tree_array[first_tree_idx].tree);
+            break;
         }
+    }
 
-        for (i = 0; i < local_tree->avl_tree_count; ++i) {
-            item = avl_delete(local_tree->avl_tree_array[i].tree,
-                              item_to_delete);
-            if (NULL == item) {
-                retval = MKAVL_RC_E_EOOSYNC;
-                abort();
+    if (first_tree_idx < local_tree_h->avl_tree_count) {
+        /* 
+         * May be more efficient to just pull the root out each time instead
+         * of traversing to get the first.
+         */
+        item_to_delete = 
+            avl_t_first(&avl_t,
+                        local_tree_h->avl_tree_array[first_tree_idx].tree);
+        while (NULL != item_to_delete) {
+            mkavl_assert_abort(runaway_counter <= MKAVL_RUNAWAY_SANITY);
+
+            for (i = first_tree_idx; i < local_tree_h->avl_tree_count; ++i) {
+                if (NULL != local_tree_h->avl_tree_array[i].tree) {
+                    item = avl_delete(local_tree_h->avl_tree_array[i].tree,
+                                      item_to_delete);
+                    mkavl_assert_abort(NULL != item);
+                }
             }
-        }
 
-        if (NULL != item_fn) {
-            rc = item_fn(item_to_delete, local_tree->context);
-            if (mkavl_rc_e_is_notok(rc)) {
-                retval = rc;
+            if (NULL != item_fn) {
+                rc = item_fn(item_to_delete, local_tree_h->context);
+                if (mkavl_rc_e_is_notok(rc)) {
+                    retval = rc;
+                }
             }
+
+            --(local_tree_h->item_count);
+
+            /* We deleted the last item, so there should be a new first */
+            item_to_delete = 
+                avl_t_first(&avl_t, 
+                            local_tree_h->avl_tree_array[first_tree_idx].tree);
+            ++runaway_counter;
         }
-
-        --(local_tree->item_count);
-
-        /* We deleted the last item, so there should be a new first */
-        item_to_delete = avl_t_first(&avl_t,
-                                     local_tree->avl_tree_array[0].tree);
-        ++runaway_counter;
     }
 
     rc = mkavl_delete_tree(tree_h);
-    if (mkavl_rc_e_is_notok(rc)) {
-        retval = rc;
-        abort();
-    }
+    mkavl_assert_abort(mkavl_rc_e_is_ok(rc));
 
     return (retval);
 }
 
 mkavl_rc_e
-mkavl_copy (mkavl_tree_handle source_tree_h, mkavl_tree_handle *new_tree_h,
+mkavl_copy (mkavl_tree_handle source_tree_h, 
+            mkavl_tree_handle *new_tree_h,
             mkavl_copy_fn copy_fn, mkavl_item_fn item_fn, 
             mkavl_allocator_st *allocator)
 {
-    // TODO
+    mkavl_tree_handle local_tree_h = NULL;
+    mkavl_allocator_st *local_allocator = allocator;
+    bool allocated_mkavl_tree = false;
+    struct avl_traverser avl_t = {0};
+    mkavl_copy_fn old_copy_fn, copy_fn_to_use;
+    void *item, *existing_item;
+    uint32_t i;
+    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
+
+    if (NULL == new_tree_h) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *new_tree_h = NULL;
+
+    if (!mkavl_tree_is_valid(source_tree_h)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    if (NULL == local_allocator) {
+        local_allocator = &(source_tree_h->allocator.mkavl_allocator);
+    }
+
+    {
+        mkavl_compare_fn cmp_fn_array[source_tree_h->avl_tree_count];
+
+        for (i = 0; i < NELEMS(cmp_fn_array); ++i) {
+            cmp_fn_array[i] = source_tree_h->avl_tree_array[i].compare_fn;
+        }
+
+        rc = mkavl_new(&local_tree_h,
+                       cmp_fn_array, NELEMS(cmp_fn_array),
+                       source_tree_h->context, local_allocator);
+        if (mkavl_rc_e_is_notok(rc)) {
+            goto err_exit;
+        }
+        allocated_mkavl_tree = true;
+
+        /*
+         * Copy the first AVL tree (which applies the user's copy function to
+         * each item).  Then, iterate over the new, copied tree and add each
+         * item to each of the other AVL trees.  Need to temorarily set the
+         * source tree's copy function to the user provided one during this
+         * iteration, since mkavl_copy_wrapper will look there for the function
+         * to use for the real copy function.
+         */
+        old_copy_fn = source_tree_h->copy_fn;
+        source_tree_h->copy_fn = copy_fn;
+        copy_fn_to_use = NULL;
+        if (NULL != copy_fn) {
+            copy_fn_to_use = mkavl_copy_wrapper;
+        }
+        local_tree_h->avl_tree_array[0].tree = 
+            avl_copy(source_tree_h->avl_tree_array[0].tree, copy_fn_to_use,
+                     NULL, &(local_tree_h->allocator.avl_allocator));
+        source_tree_h->copy_fn = old_copy_fn;
+        if (NULL == local_tree_h->avl_tree_array[0].tree) {
+            goto err_exit;
+        }
+
+        if (local_tree_h->avl_tree_count > 1) {
+            item = avl_t_first(&avl_t, local_tree_h->avl_tree_array[0].tree);
+            while (NULL != item) {
+                for (i = 1; i < local_tree_h->avl_tree_count; ++i) {
+                    rc = mkavl_add_key_idx(local_tree_h, i,
+                                           item, &existing_item);
+                    if (mkavl_rc_e_is_notok(rc)) {
+                        goto err_exit;
+                    }
+                }
+                item = avl_t_next(&avl_t);
+            }
+        }
+    }
+
+    *new_tree_h = local_tree_h;
+
     return (MKAVL_RC_E_SUCCESS);
+
+err_exit:
+
+    if (allocated_mkavl_tree) {
+        /* Just deleting the tree should clean everything up. */
+        mkavl_delete(&local_tree_h, item_fn);
+    }
+
+    return (rc);
 }
 
 mkavl_rc_e
@@ -614,9 +738,7 @@ err_exit:
         if (NULL == first_item) {
             /* Attempt to remove all the items we added */
             item = avl_delete(tree_h->avl_tree_array[i].tree, item_to_add);
-            if (NULL == item) {
-                abort();
-            }
+            mkavl_assert_abort(NULL != item);
         }
     }
 
@@ -708,9 +830,7 @@ err_exit:
         if (NULL != first_item) {
             /* Attempt to insert all the items we removed */
             item = avl_insert(tree_h->avl_tree_array[i].tree, first_item);
-            if (NULL != item) {
-                abort();
-            }
+            mkavl_assert_abort(NULL == item);
         }
     }
 

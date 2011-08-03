@@ -153,14 +153,15 @@ mkavl_find_type_e_get_string(mkavl_find_type_e type);
 extern mkavl_rc_e
 mkavl_new(mkavl_tree_handle *tree_h,
           mkavl_compare_fn *compare_fn_array, 
-          size_t compare_fn_array_size, 
+          size_t compare_fn_array_count, 
           void *context, mkavl_allocator_st *allocator);
 
 extern mkavl_rc_e
 mkavl_delete(mkavl_tree_handle *tree_h, mkavl_item_fn item_fn);
 
 extern mkavl_rc_e
-mkavl_copy(mkavl_tree_handle source_tree_h, mkavl_tree_handle *new_tree_h,
+mkavl_copy(const mkavl_tree_handle source_tree_h, 
+           mkavl_tree_handle *new_tree_h,
            mkavl_copy_fn copy_fn, mkavl_item_fn item_fn, 
            mkavl_allocator_st *allocator);
 
