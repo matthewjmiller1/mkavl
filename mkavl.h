@@ -21,6 +21,39 @@
  *
  * This is the public interface for the multi-key AVL interface.
  */
+
+/**
+ * @mainpage mkavl: Multi-Key AVL Trees
+ * \author Matthew J. Miller (matt@matthewjmiller.net)
+ * \date 2011
+ *
+ * @section sec_intro Introduction
+ *
+ * TODO
+ * http://www.boost.org/doc/libs/1_46_1/libs/multi_index/doc/index.html
+ *
+ * \section sec_usage Usage
+ *
+ * Just run <tt>make all</tt> to build the dynamic and shared libraries in lib/.
+ * Use "-lmkavl" to link the library.
+ * Running <tt>make clean</tt> will remove generated files (e.g., .o).
+ *
+ * @section sec_license GNU General Public License
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef __MKAVL_H__
 #define __MKAVL_H__
 
@@ -54,13 +87,23 @@ typedef enum mkavl_rc_e_ {
     MKAVL_RC_E_MAX,
 } mkavl_rc_e;
 
+/**
+ * The type of find for lookups.
+ */
 typedef enum mkavl_find_type_e_ {
+    /** Invalid type */
     MKAVL_FIND_TYPE_E_INVALID,
+    /** Find an item equal to */
     MKAVL_FIND_TYPE_E_EQUAL,
+    /** Find an item greater than */
     MKAVL_FIND_TYPE_E_GT,
+    /** Find an item less than */
     MKAVL_FIND_TYPE_E_LT,
+    /** Find an item greater than or equal to */
     MKAVL_FIND_TYPE_E_GE,
+    /** Find an item less than or equal to */
     MKAVL_FIND_TYPE_E_LE,
+    /** Max value for bounds testing */
     MKAVL_FIND_TYPE_E_MAX,
 } mkavl_find_type_e;
 

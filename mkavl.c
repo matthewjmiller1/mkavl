@@ -55,39 +55,78 @@
  */
 #define MKAVL_CTX_STALE 0xDEADBEEF
 
+/**
+ * The internal context data for AVL callbacks.
+ */
 typedef struct mkavl_avl_ctx_st_ {
+    /** Used for sanity checks */
     uint32_t magic;
+    /** The mkavl tree associated with the callback */
     mkavl_tree_handle tree_h;
+    /** The index in the mkavl tree of the AVL tree for the callback */
     size_t key_idx;
 } mkavl_avl_ctx_st;
 
+/**
+ * Maintains info on the AVL data associated with an AVL tree in the mkavl tree.
+ */
 typedef struct mkavl_avl_tree_st_ {
+    /** The AVL tree pointer */
     struct avl_table *tree;
+    /** The comparison function to use for the tree */
     mkavl_compare_fn compare_fn;
+    /** The context used for the AVL tree */
     mkavl_avl_ctx_st *avl_ctx;
 } mkavl_avl_tree_st;
 
+/**
+ * A wrapper structure to map the mkavl_allocator to the avl_allocator.
+ */
 typedef struct mkavl_allocator_wrapper_st_ {
     /**
      * The libavl allocator.  Must be the first member for use in casting.
      */
     struct libavl_allocator avl_allocator;
+    /** Used for sanity checks */
     uint32_t magic;
+    /** The mkavl allocator */
     mkavl_allocator_st mkavl_allocator;
 } mkavl_allocator_wrapper_st;
 
+/**
+ * The internal representation of the mkavl tree object.
+ */
 typedef struct mkavl_tree_st_ {
+    /** The opaque context passed in by the client */
     void *context;
+    /** The memory allocator info passed in by the client */
     mkavl_allocator_wrapper_st allocator;
+    /** The number of AVL trees within this object */
     size_t avl_tree_count;
+    /** An array of the AVL tree info of size avl_tree_count */
     mkavl_avl_tree_st *avl_tree_array;
+    /** 
+     * A count of the number of data items inserted by the user.  This is not
+     * the total over all AVL trees.  E.g., if there are 3 AVL trees and 5 items
+     * have been inserted in the mkavl, then this value is 5, not 15.
+     */
     uint32_t item_count;
+    /** 
+     * The copy function passed in my the client to apply to items when
+     * mkavl_copy is done.
+     */
     mkavl_copy_fn copy_fn;
 } mkavl_tree_st;
 
+/**
+ * The internal representation of the mkavl iterator.
+ */
 typedef struct mkavl_iterator_st_ {
+    /** The AVL traverser to use */
     struct avl_traverser avl_t;
+    /** The mkavl tree associaed with the iteration */
     mkavl_tree_handle tree_h;
+    /** The index in the mkavl tree of the AVL tree for the iteration */
     size_t key_idx;
 } mkavl_iterator_st;
 
@@ -203,7 +242,7 @@ CT_ASSERT(NELEMS(mkavl_find_type_e_string) == (MKAVL_FIND_TYPE_E_MAX + 1));
 /**
  * Indicates whether the return code is valid.
  *
- * @param rc The return code to check
+ * @param type The type to check
  * @return true if the return code is valid.
  */
 bool
@@ -232,6 +271,12 @@ mkavl_find_type_e_get_string (mkavl_find_type_e type)
     return (retval);
 }
 
+/**
+ * Sanity check for mkavl_avl_ctx_st objects.
+ *
+ * @param avl_ctx The object to check.  If NULL, false is returned.
+ * @return true if the object is valid.
+ */
 static bool
 mkavl_avl_ctx_is_valid (mkavl_avl_ctx_st *avl_ctx)
 {
@@ -256,6 +301,12 @@ mkavl_avl_ctx_is_valid (mkavl_avl_ctx_st *avl_ctx)
     return (is_valid);
 }
 
+/**
+ * Sanity check for mkavl_allocator_wrapper_st objects.
+ *
+ * @param allocator The object to check.  If NULL, false is returned.
+ * @return true if the object is valid.
+ */
 static bool
 mkavl_allocator_wrapper_is_valid (mkavl_allocator_wrapper_st *allocator)
 {
@@ -280,6 +331,13 @@ mkavl_allocator_wrapper_is_valid (mkavl_allocator_wrapper_st *allocator)
     return (is_valid);
 }
 
+/**
+ * A wrapper to map the AVL callback to the client callback for the mkavl tree.
+ *
+ * @param allocator The memory allocator associated with the callback
+ * @param size The size to allocate
+ * @return A pointer to the new memory, or NULL on failure.
+ */
 static void *
 mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
 {
@@ -293,6 +351,12 @@ mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
     return (mkavl_allocator->mkavl_allocator.malloc_fn(size));
 }
 
+/**
+ * A wrapper to map the AVL callback to the client callback for the mkavl tree.
+ *
+ * @param allocator The memory allocator associated with the callback
+ * @param libavl_block The memory to free
+ */
 static void
 mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
 {
@@ -306,6 +370,7 @@ mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
     return (mkavl_allocator->mkavl_allocator.free_fn(libavl_block));
 }
 
+/* By default, we'll just use malloc and free if the client passes nothing in */
 static mkavl_allocator_st mkavl_allocator_default = {
     malloc,
     free
@@ -316,6 +381,14 @@ static struct libavl_allocator mkavl_allocator_wrapper = {
     mkavl_free_wrapper
 };
 
+/**
+ * A wrapper to map the AVL callback to the client callback for the mkavl tree.
+ *
+ * @param avl_a The first item in the comparison
+ * @param avl_b The second item in the comparison
+ * @param avl_param The context associated with the callback
+ * @return 0 if equal, -1 if avl_a < avl_b, and 1 if avl_a > avl_b
+ */
 static int
 mkavl_compare_wrapper (const void *avl_a, const void *avl_b, void *avl_param)
 {
@@ -331,6 +404,13 @@ mkavl_compare_wrapper (const void *avl_a, const void *avl_b, void *avl_param)
     return (cmp_fn(avl_a, avl_b, avl_ctx->tree_h->context));
 }
 
+/**
+ * A wrapper to map the AVL callback to the client callback for the mkavl tree.
+ *
+ * @param avl_item The AVL item to copy
+ * @param avl_param The context associated with the callback
+ * @return The new, copied item
+ */
 static void *
 mkavl_copy_wrapper (void *avl_item, void *avl_param)
 {
@@ -346,6 +426,13 @@ mkavl_copy_wrapper (void *avl_item, void *avl_param)
     return (copy_fn(avl_item, avl_ctx->tree_h->context));
 }
 
+/**
+ * This will free all memory associated with the tree and set the pointer to
+ * NULL.
+ *
+ * @param tree_h Pointer to the tree to delete
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_delete_tree (mkavl_tree_handle *tree_h)
 {
@@ -386,6 +473,12 @@ mkavl_delete_tree (mkavl_tree_handle *tree_h)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Sanity check for mkavl tree objects.
+ *
+ * @param tree_h The object to check.  If NULL, false is returned.
+ * @return true if the object is valid.
+ */
 static bool
 mkavl_tree_is_valid (mkavl_tree_handle tree_h)
 {
@@ -427,6 +520,12 @@ mkavl_tree_is_valid (mkavl_tree_handle tree_h)
     return (is_valid);
 }
 
+/**
+ * Sanity check for mkavl_iterator_handle objects.
+ *
+ * @param iterator_h The object to check.  If NULL, false is returned.
+ * @return true if the object is valid.
+ */
 static bool
 mkavl_iterator_is_valid (mkavl_iterator_handle iterator_h)
 {
@@ -448,6 +547,23 @@ mkavl_iterator_is_valid (mkavl_iterator_handle iterator_h)
     return (is_valid);
 }
 
+/**
+ * Create a new mkavl tree composed of AVL trees using the given array of
+ * comparison functions.
+ *
+ * @see mkavl_delete
+ * @param tree_h A pointer to the memory location for the new tree.
+ * @param compare_fn_array An array of size compare_fn_array_count of the
+ * comparison functions for the mkavl.  This allows the same set of data items
+ * to be stored in different orders by mulitple keys.  A deep copy of the
+ * functions is made for the tree_h.  There must be at least one function passed
+ * in.
+ * @param compare_fn_array_count The size of the compare_fn_array.
+ * @param context An opaque context passed back to the client in callbacks.
+ * @param allocator The memory allocation functions to use for the tree, or NULL
+ * if the default functions are to be used.
+ * @return The return value
+ */
 mkavl_rc_e
 mkavl_new (mkavl_tree_handle *tree_h,
            mkavl_compare_fn *compare_fn_array, 
@@ -551,6 +667,21 @@ err_exit:
     return (rc);
 }
 
+/**
+ * The destroys the tree that was allocated by mkavl_new.  Note that this
+ * doesn't actually free the data of the items as that is left to the client.
+ * The item_fn parameter can be used for this purpose.  Upon return, the tree_h
+ * memory is set to NULL.  This is O(N lg N) for N items.
+ *
+ * @see mkavl_new
+ * @see mkavl_delete_tree
+ * @param tree_h A pointer the the tree to free.
+ * @param item_fn This function is applied to each item after it has been
+ * removed from all the AVL trees.  This is only called once per item regardless
+ * of how many AVL trees there are.  E.g., this could be the function to free
+ * the memory for the data.  If NULL, no function is applied.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
 {
@@ -627,6 +758,22 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
     return (retval);
 }
 
+/**
+ * Deep copy a mkavl tree into a new tree.
+ *
+ * @param source_tree_h The tree from which to copy.
+ * @param new_tree_h A pointer to the new tree to which the copy will be done.
+ * @param copy_fn A function that is applied to each item in the source tree
+ * before it is copied to the new tree.  This is applied once per item
+ * regardless of how many AVL trees there are.  E.g., this may allocate a deep
+ * copy of the data.  If NULL, then a shallow copy of the data is copied to the
+ * new tree.
+ * @param item_fn If there is an error copying the new tree, this function is
+ * applied to all items in the new tree as it is destroyed.  E.g., this may be a
+ * function to free the data.
+ * @param allocator The memory allocation functions to use for the new tree.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_copy (mkavl_tree_handle source_tree_h, 
             mkavl_tree_handle *new_tree_h,
@@ -721,6 +868,15 @@ err_exit:
     return (rc);
 }
 
+/**
+ * Add an item to each AVL tree in the mkavl.
+ *
+ * @param tree_h The mkavl tree.
+ * @param item_to_add A pointer to the data to add.
+ * @param existing_item If an existing item is found, it is returned.
+ * Otherwise, NULL if the item was not found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_add (mkavl_tree_handle tree_h, void *item_to_add, 
            void **existing_item)
@@ -768,6 +924,16 @@ err_exit:
     return (rc);
 }
 
+/**
+ * Get the item at the end of the AVL tree.  That is, either the first or last
+ * item in the tree rooted at the node depending on the side input.
+ *
+ * @param node The root of the subtree to search.
+ * @param found_item  The item found.
+ * @param side 0 to find the first (smallest) item or 1 to find the last
+ * (largest) item
+ * @return The return code
+ */
 static inline mkavl_rc_e
 mkavl_avl_end_item (const struct avl_node *node, void **found_item,
                     uint8_t side)
@@ -796,18 +962,45 @@ mkavl_avl_end_item (const struct avl_node *node, void **found_item,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the first (smallest) item in the tree rooted at the node.
+ *
+ * @param node The root of the subtree.
+ * @param found_item The item that was found.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_avl_first (const struct avl_node *node, void **found_item)
 {
     return (mkavl_avl_end_item(node, found_item, 0));
 }
 
+/**
+ * Get the last (largest) item in the tree rooted at the node.
+ *
+ * @param node The root of the subtree.
+ * @param found_item The item that was found.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_avl_last (const struct avl_node *node, void **found_item)
 {
     return (mkavl_avl_end_item(node, found_item, 1));
 }
 
+/**
+ * Find the item less than (or equal to) the given lookup_item.  Note that the
+ * lookup_item does not necessarily have to exist in the tree for an item to be
+ * found.  This is a recursive funciton.
+ *
+ * @param avl_tree The AVL tree to search.
+ * @param node The current node to compare.
+ * @param find_equal_to Indicates whether to return an equal item if found or
+ * only strictly less than.
+ * @param lookup_item The item to use as the lookup target.
+ * @param found_item The item found.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_find_avl_lt (const struct avl_table *avl_tree,
                    const struct avl_node *node,
@@ -869,6 +1062,19 @@ mkavl_find_avl_lt (const struct avl_table *avl_tree,
     return (mkavl_avl_last(node->avl_link[0], found_item));
 }
 
+/**
+ * Find the item greater than (or equal to) the given lookup_item.  Note that
+ * the lookup_item does not necessarily have to exist in the tree for an item to
+ * be found.  This is a recursive funciton.
+ *
+ * @param avl_tree The AVL tree to search.
+ * @param node The current node to compare.
+ * @param find_equal_to Indicates whether to return an equal item if found or
+ * only strictly greater than.
+ * @param lookup_item The item to use as the lookup target.
+ * @param found_item The item found.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_find_avl_gt (const struct avl_table *avl_tree,
                    const struct avl_node *node,
@@ -930,6 +1136,16 @@ mkavl_find_avl_gt (const struct avl_table *avl_tree,
     return (mkavl_avl_first(node->avl_link[1], found_item));
 }
 
+/**
+ * Find an item in the tree.
+ *
+ * @param tree_h The tree to search
+ * @param type The type of lookup to do.
+ * @param key_idx The AVL tree being searched.
+ * @param lookup_item The item to use as the lookup target.
+ * @param found_item The item found for the lookup.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_find (mkavl_tree_handle tree_h, mkavl_find_type_e type,
             size_t key_idx, const void *lookup_item, void **found_item)
@@ -999,6 +1215,14 @@ mkavl_find (mkavl_tree_handle tree_h, mkavl_find_type_e type,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Remove an item from mkavl tree.
+ *
+ * @param tree_h The tree from which to remove.
+ * @param item_to_remove The item being removed.
+ * @param found_item If the item existed, the item that was found and removed.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_remove (mkavl_tree_handle tree_h, const void *item_to_remove,
               void **found_item)
@@ -1046,6 +1270,23 @@ err_exit:
     return (rc);
 }
 
+/**
+ * Add an item only to a specific AVL tree within the mkavl tree.  Note that
+ * this must be used very carefully in conjunction with mkavl_remove_key_idx to
+ * make sure the mkavl does not become out of sync.  In steady state, the mkavl
+ * should always have an equal number of data items in each AVL tree.  However,
+ * if a field changes in an item that affects some keys but not other, these
+ * APIs may be used to remove the item with the old values from the affected
+ * AVLs, update the values, and then re-add to each AVL tree from which the old
+ * item was removed.
+ *
+ * @see mkavl_remove_key_idx
+ * @param tree_h The mkavl tree.
+ * @param key_idx The index of the AVL tree to which the item is added.
+ * @param item_to_add The item being added.
+ * @param existing_item If an existing item is found, it is returned.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_add_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
                    void *item_to_add, void **existing_item)
@@ -1071,6 +1312,23 @@ mkavl_add_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Remove an item only from a specific AVL tree within the mkavl tree.  Note
+ * that this must be used very carefully in conjunction with
+ * mkavl_add_key_idx to make sure the mkavl does not become out of sync.  In
+ * steady state, the mkavl should always have an equal number of data items in
+ * each AVL tree.  However, if a field changes in an item that affects some keys
+ * but not other, these APIs may be used to remove the item with the old values
+ * from the affected AVLs, update the values, and then re-add to each AVL tree
+ * from which the old item was removed.
+ *
+ * @see mkavl_add_key_idx
+ * @param tree_h The mkavl tree.
+ * @param key_idx The index of the AVL tree to which the item is added.
+ * @param item_to_remove The item being removed.
+ * @param found_item If the item existed, the item that was found and removed.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_remove_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
                       const void *item_to_remove, void **found_item)
@@ -1096,6 +1354,19 @@ mkavl_remove_key_idx (mkavl_tree_handle tree_h, size_t key_idx,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get a count of the total number of items within the tree.  Note that this is
+ * the steady state account, i.e., broadly, the number of calls to mkavl_add
+ * that succeeded minus the number of calls to mkavl_remove that succeeded.  If
+ * this is called in between calls to mkavl_add_key_idx and
+ * mkavl_remove_key_idx, then it is possible for individual AVL trees to have a
+ * different count.
+ *
+ * @see mkavl_add
+ * @see mkavl_remove
+ * @see mkavl_add_key_idx
+ * @see mkavl_remove_key_idx
+ */
 uint32_t
 mkavl_count (mkavl_tree_handle tree_h)
 {
@@ -1106,6 +1377,14 @@ mkavl_count (mkavl_tree_handle tree_h)
     return (tree_h->item_count);
 }
 
+/**
+ * Walk every node in the tree, calling the given function for each item.
+ *
+ * @param tree_h The tree to walk.
+ * @param cb_fn The callback function to apply to each item.
+ * @param walk_context The opaque walk context passed to the callback.
+ * @return The return code.
+ */
 mkavl_rc_e
 mkavl_walk (mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
             void *walk_context)
@@ -1141,6 +1420,15 @@ mkavl_walk (mkavl_tree_handle tree_h, mkavl_walk_cb_fn cb_fn,
     return (rc);
 }
 
+/**
+ * Create a new iterator to use.
+ *
+ * @see mkavl_iter_delete
+ * @param iterator_h The pointer to fill in with the new iterator.
+ * @param tree_h The tree on which to iterate.
+ * @param key_idx The index of the AVL tree on which to iterate.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_new (mkavl_iterator_handle *iterator_h, mkavl_tree_handle tree_h,
                 size_t key_idx)
@@ -1183,6 +1471,14 @@ err_exit:
     return (rc);
 }
 
+/**
+ * Destroy the iterator.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to free.  Upon return, this will be set to
+ * NULL.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_delete (mkavl_iterator_handle *iterator_h)
 {
@@ -1206,6 +1502,14 @@ mkavl_iter_delete (mkavl_iterator_handle *iterator_h)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the first item in the iteration.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_first (mkavl_iterator_handle iterator_h, void **item)
 {
@@ -1224,6 +1528,14 @@ mkavl_iter_first (mkavl_iterator_handle iterator_h, void **item)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the last item in the iteration.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_last (mkavl_iterator_handle iterator_h, void **item)
 {
@@ -1242,6 +1554,15 @@ mkavl_iter_last (mkavl_iterator_handle iterator_h, void **item)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Find an item and update the iterator to that node.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param lookup_item The item to find.
+ * @param found_item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_find (mkavl_iterator_handle iterator_h, void *lookup_item,
                  void **found_item)
@@ -1263,6 +1584,14 @@ mkavl_iter_find (mkavl_iterator_handle iterator_h, void *lookup_item,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the next item in the iteration and update the iterator to that node.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_next (mkavl_iterator_handle iterator_h, void **item)
 {
@@ -1280,6 +1609,14 @@ mkavl_iter_next (mkavl_iterator_handle iterator_h, void **item)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the previous item in the iteration and update the iterator to that node.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_prev (mkavl_iterator_handle iterator_h, void **item)
 {
@@ -1297,6 +1634,14 @@ mkavl_iter_prev (mkavl_iterator_handle iterator_h, void **item)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Get the current item in the iteration.
+ *
+ * @see mkavl_iter_new
+ * @param iterator_h The iterator to use.
+ * @param item The item found.
+ * @return The return code
+ */
 mkavl_rc_e
 mkavl_iter_cur (mkavl_iterator_handle iterator_h, void **item)
 {
