@@ -10,7 +10,7 @@ CC=gcc
 AR=ar
 LN=ln
 #CFLAGS=-I$(IDIR)
-CFLAGS=-Wall -g -fPIC
+CFLAGS=-Wall -Werror -g -fPIC
 
 ODIR=obj
 LDIR =lib
