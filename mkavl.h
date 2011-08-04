@@ -29,8 +29,45 @@
  *
  * @section sec_intro Introduction
  *
- * TODO
- * http://www.boost.org/doc/libs/1_46_1/libs/multi_index/doc/index.html
+ * The idea behind multi-key AVL trees is that a single item can be keyed
+ * multiple ways to different allow <i>O(lg N)</i> lookups.  The simplest
+ * example would be if you have items that have two separate key fields.  For
+ * example, if you have an employee database where each employee has a unique ID
+ * and phone number.  The multi-key AVL essentially manages two separate AVLs
+ * under the covers for the same employee data, one keyed by ID and one by phone
+ * number, so an employee can be looked up efficiently by either field.
+ *
+ * When the mkavl tree is created, \e M different comparison functions are
+ * given.  When mkavl_add is called, the item is inserted in \e M different
+ * AVLs, with all \e M AVL nodes pointing to the same data item.
+ *
+ * The only similar data structure I could find was 
+ * <a 
+ * href="http://www.boost.org/doc/libs/1_46_1/libs/multi_index/doc/index.html">
+ * the \c multi_index library</a>
+ * in C++'s Boost.
+ *
+ * The backend AVL implementation comes from 
+ * <a href="http://www.stanford.edu/~blp/avl/">Ben Plaff's open source 
+ * AVL library</a>.
+ *
+ * \section sec_example Example
+ *
+ * A more complex example is, say you want to be able to query your employee
+ * database to find all employees with a given last name without walking the
+ * entire database.  Let's say the employee ID is the primary key.  You could
+ * create an mkavl tree with two comparison function keyed in the following
+ * manner:
+ *
+ *    -# <tt>Key1: <ID></tt>
+ *    -# <tt>Key2: <LastName | ID></tt>
+ *
+ * Knowing the zero is the minimum ID value, you could lookup the first employee
+ * with the last name "Smith" in <i>O(lg N)</i> time by doing a greater than or
+ * equal to lookup on the key <tt><"Smith" | 0></tt>.  If the record returned
+ * doesn't have the the LastName "Smith", then there are no matching records.
+ * Otherwise, you can continue iterating through all the "Smith" records doing
+ * greater than lookups until you hit NULL or a non-"Smith" record.
  *
  * \section sec_usage Usage
  *
