@@ -594,7 +594,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
     local_tree_h->context = context;
     memcpy(&(local_tree_h->allocator.avl_allocator), &mkavl_allocator_wrapper,
            sizeof(local_tree_h->allocator.avl_allocator));
-    memcpy(&(local_tree_h->allocator.mkavl_allocator), &local_allocator,
+    memcpy(&(local_tree_h->allocator.mkavl_allocator), local_allocator,
            sizeof(local_tree_h->allocator));
     local_tree_h->allocator.magic = MKAVL_CTX_MAGIC;
     local_tree_h->avl_tree_count = compare_fn_array_count;
@@ -905,7 +905,9 @@ mkavl_add (mkavl_tree_handle tree_h, void *item_to_add,
         }
     }
 
-    ++(tree_h->item_count);
+    if (NULL == first_item) {
+        ++(tree_h->item_count);
+    }
 
     *existing_item = first_item;
 
@@ -1251,7 +1253,13 @@ mkavl_remove (mkavl_tree_handle tree_h, const void *item_to_remove,
         }
     }
 
-    --(tree_h->item_count);
+    if (NULL != first_item) {
+        if (0 == tree_h->item_count) {
+            rc = MKAVL_RC_E_EOOSYNC;
+            goto err_exit;
+        }
+        --(tree_h->item_count);
+    }
 
     *found_item = first_item;
 
