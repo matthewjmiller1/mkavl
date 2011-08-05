@@ -30,6 +30,18 @@
 #include <stdio.h>
 #include "../mkavl.h"
 
+#define LOG_FAIL(fmt, args...) \
+do { \
+    printf("FAILURE(%s:%u): " fmt "\n", __FUNCTION__, __LINE__, ##args); \
+} while (0)
+
+/**
+ * Determine the number of elements in an array.
+ */
+#ifndef NELEMS
+#define NELEMS(x) (sizeof(x) / sizeof(x[0]))
+#endif
+
 static const uint32_t default_node_cnt = 15;
 static const uint32_t default_run_cnt = 15;
 static const uint8_t default_verbosity = 0;
@@ -227,6 +239,10 @@ get_unique_count (uint32_t *array, size_t num_elem)
     return (count);
 }
 
+/* 
+ * Do a forward declaration so we can keep all the AVL setup stuff separate
+ * below main().
+ */
 static bool
 run_mkavl_test(uint32_t *insert_seq, uint32_t *delete_seq, 
                uint32_t uniq_cnt, test_mkavl_opts_st *opts);
@@ -289,9 +305,157 @@ main (int argc, char *argv[])
     return (0);
 }
 
+/* AVL operation functions */
+
+#define TEST_MKAVL_MAGIC 0x1234ABCD
+
+/**
+ * Simply compare the uint32_t values.
+ *
+ * @param item1 Item to compare
+ * @param item2 Item to compare
+ * @param context Context for the tree
+ * @return Comparison result
+ */
+static int32_t
+mkavl_cmp_fn1 (const void *item1, const void *item2, void *context)
+{
+    const uint32_t *i1 = item1;
+    const uint32_t *i2 = item2;
+
+    if (TEST_MKAVL_MAGIC != (uintptr_t) context) {
+        abort();
+    }
+
+    if (*i1 < *i2) {
+        return (-1);
+    } else if (*i1 > *i2) {
+        return (1);
+    }
+
+    return (0);
+}
+
+/**
+ * Reverse the values of the items.
+ *
+ * @param item1 Item to compare
+ * @param item2 Item to compare
+ * @param context Context for the tree
+ * @return Comparison result
+ */
+static int32_t
+mkavl_cmp_fn2 (const void *item1, const void *item2, void *context)
+{
+    const uint32_t *i1 = item1;
+    const uint32_t *i2 = item2;
+
+    if (TEST_MKAVL_MAGIC != (uintptr_t) context) {
+        abort();
+    }
+
+    if (*i1 > *i2) {
+        return (-1);
+    } else if (*i1 < *i2) {
+        return (1);
+    }
+
+    return (0);
+}
+
 static bool
 run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq, 
                 uint32_t uniq_cnt, test_mkavl_opts_st *opts)
 {
+    mkavl_tree_handle tree_h = NULL;
+    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
+    mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
+    uint32_t dup_cnt, null_cnt, non_null_cnt;;
+    uint32_t i;
+    uint32_t *existing_item;
+
+    if ((NULL == insert_seq) || (NULL == delete_seq) ||
+        (NULL == opts)) {
+        LOG_FAIL("invalid input");
+        return (false);
+    }
+    dup_cnt = (opts->node_cnt - uniq_cnt);
+
+    rc = mkavl_new(&tree_h, cmp_fn_array, NELEMS(cmp_fn_array),
+                   (void *) TEST_MKAVL_MAGIC, NULL);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    /* Destroy an empty tree */
+    rc = mkavl_delete(&tree_h, NULL);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("delete empty failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    rc = mkavl_new(&tree_h, cmp_fn_array, NELEMS(cmp_fn_array),
+                   (void *) TEST_MKAVL_MAGIC, NULL);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    /* Add in all the items */
+    non_null_cnt = 0;
+    for (i = 0; i < opts->node_cnt; ++i) {
+        rc = mkavl_add(tree_h, &(insert_seq[i]), (void **) &existing_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("add failed, rc(%s)", mkavl_rc_e_get_string(rc));
+            goto err_exit;
+        }
+
+        if (NULL != existing_item) {
+            ++non_null_cnt;
+        }
+    }
+
+    if (non_null_cnt != dup_cnt) {
+        LOG_FAIL("duplidate check failed, non_null_cnt(%u) dup_cnt(%u)", 
+                 non_null_cnt, dup_cnt);
+        goto err_exit;
+    }
+
+    if (mkavl_count(tree_h) != uniq_cnt) {
+        LOG_FAIL("unique check failed, mkavl_count(%u) uniq_cnt(%u)", 
+                 mkavl_count(tree_h), uniq_cnt);
+        goto err_exit;
+    }
+
+    null_cnt = 0;
+
+    /* Test find and add/remove from thread */
+
+    /* Copy tree: make sure copy fn is called as expected, test user defined
+     * allocator here and in new */
+
+    /* 
+     * Iterate over both trees, make sure order is the same, everything is less
+     * than in one iterator and greater than in the other.
+     */
+
+    /* Do walk over trees */
+
+    /* Delete items from one tree */
+
+    /* Destroy other tree: make sure destroy is called as expected */
+
     return (true);
+
+err_exit:
+
+    if (NULL != tree_h) {
+        rc = mkavl_delete(&tree_h, NULL);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        }
+    }
+
+    return (false);
 }
