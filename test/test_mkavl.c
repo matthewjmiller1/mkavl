@@ -172,6 +172,12 @@ parse_command_line (int argc, char **argv, test_mkavl_opts_st *opts)
         print_usage(true, EXIT_SUCCESS);
     }
 
+    if (0 == opts->node_cnt) {
+        printf("Error: node count(%u) must be non-zero\n",
+               opts->node_cnt);
+        print_usage(true, EXIT_SUCCESS);
+    }
+
     if (opts->verbosity >= 3) {
         print_opts(opts);
     }
@@ -260,6 +266,7 @@ main (int argc, char *argv[])
 
     parse_command_line(argc, argv, &opts);
 
+    printf("\n");
     cur_seed = opts.seed;
     for (cur_run = 0; cur_run < opts.run_cnt; ++cur_run) {
         uint32_t insert_seq[opts.node_cnt];
@@ -299,8 +306,11 @@ main (int argc, char *argv[])
     }
 
     if (0 != fail_count) {
-        printf("\n%u TEST(S) FAILED\n", fail_count);
+        printf("\n%u/%u TESTS FAILED\n", fail_count, opts.run_cnt);
+    } else {
+        printf("\nALL TESTS PASSED\n");
     }
+    printf("\n");
 
     return (0);
 }
@@ -363,15 +373,22 @@ mkavl_cmp_fn2 (const void *item1, const void *item2, void *context)
     return (0);
 }
 
+typedef enum mkavl_test_key_e_ {
+    MKAVL_TEST_KEY_E_ASC,
+    MKAVL_TEST_KEY_E_DESC,
+    MKAVL_TEST_KEY_E_MAX,
+} mkavl_test_key_e;
+
 static bool
 run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq, 
                 uint32_t uniq_cnt, test_mkavl_opts_st *opts)
 {
     mkavl_tree_handle tree_h = NULL;
+    mkavl_tree_handle tree2_h = NULL;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
     mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
     uint32_t dup_cnt, null_cnt, non_null_cnt;;
-    uint32_t i;
+    uint32_t i, j;
     uint32_t *existing_item;
 
     if ((NULL == insert_seq) || (NULL == delete_seq) ||
@@ -402,6 +419,35 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
         goto err_exit;
     }
 
+    /* Test new error input */
+    if (0 != mkavl_count(NULL)) {
+        LOG_FAIL("NULL mkavl_count failed, mkavl_count(%u)", 
+                 mkavl_count(NULL));
+        goto err_exit;
+    }
+
+    rc = mkavl_new(NULL, cmp_fn_array, NELEMS(cmp_fn_array),
+                   (void *) TEST_MKAVL_MAGIC, NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL tree failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    rc = mkavl_new(&tree2_h, NULL, NELEMS(cmp_fn_array),
+                   (void *) TEST_MKAVL_MAGIC, NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL function failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    rc = mkavl_new(&tree2_h, cmp_fn_array, 0,
+                   (void *) TEST_MKAVL_MAGIC, NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("zero size function failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
     /* Add in all the items */
     non_null_cnt = 0;
     for (i = 0; i < opts->node_cnt; ++i) {
@@ -428,7 +474,54 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
         goto err_exit;
     }
 
-    null_cnt = 0;
+    /* Test add error input */
+    rc = mkavl_add(tree_h, &(insert_seq[0]), (void **) NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL existing item failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    rc = mkavl_add(tree_h, NULL, (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL item failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    rc = mkavl_add(NULL, &(insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL tree failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        goto err_exit;
+    }
+
+    /* Test finding equal items */
+    for (i = 0; i < opts->node_cnt; ++i) {
+        for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
+            rc = mkavl_find(tree_h, MKAVL_FIND_TYPE_E_EQUAL, j,
+                            &(insert_seq[i]), (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                goto err_exit;
+            }
+
+            if (NULL == existing_item) {
+                LOG_FAIL("find failed for %u", insert_seq[i]);
+                goto err_exit;
+            }
+
+            if (*existing_item != insert_seq[i]) {
+                LOG_FAIL("find failed for %u, found %u", insert_seq[i],
+                         *existing_item);
+                goto err_exit;
+            }
+        }
+    }
+
+    /* Test all types of find */
+
+    /* Test find error input */
 
     /* Test find and add/remove from thread */
 
@@ -443,6 +536,7 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
     /* Do walk over trees */
 
     /* Delete items from one tree */
+    null_cnt = 0;
 
     /* Destroy other tree: make sure destroy is called as expected */
 
