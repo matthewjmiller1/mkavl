@@ -680,10 +680,17 @@ err_exit:
  * removed from all the AVL trees.  This is only called once per item regardless
  * of how many AVL trees there are.  E.g., this could be the function to free
  * the memory for the data.  If NULL, no function is applied.
+ * @param delete_context_fn This function is applied to the tree's opaque client
+ * context that was given via mkavl_new().  E.g., this could free the client
+ * context if it was a heap memory pointer.  If NULL, no function is applied.
+ * If given, the function will be called even if the client context is NULL.
+ * This function is called after all the items have been deleted and item
+ * functions called.
  * @return The return code
  */
 mkavl_rc_e
-mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
+mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn,
+              mkavl_delete_context_fn delete_context_fn)
 {
     mkavl_tree_handle local_tree_h;
     void *item, *item_to_delete;
@@ -752,6 +759,13 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
         }
     }
 
+    if (NULL != delete_context_fn) {
+        rc = delete_context_fn(local_tree_h->context);
+        if (mkavl_rc_e_is_notok(rc)) {
+            retval = rc;
+        }
+    }
+
     rc = mkavl_delete_tree(tree_h);
     mkavl_assert_abort(mkavl_rc_e_is_ok(rc));
 
@@ -771,6 +785,15 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn)
  * @param item_fn If there is an error copying the new tree, this function is
  * applied to all items in the new tree as it is destroyed.  E.g., this may be a
  * function to free the data.
+ * @param use_source_context If true, the client context from source_tree_h is
+ * used for the new tree.  If false, new_context is used for the new tree.
+ * @param new_context The opaque client context to use for the new tree if
+ * user_source_context if false.
+ * @param delete_context_fn Upon an error, this function will be applied to the
+ * new_context if use_source_context is false.  If use_source_context is true,
+ * this is a no-op in the case of an error (will not call on the source tree's
+ * context).  If NULL, no function is applied.  If given, the function will be
+ * called even if the client context is NULL.
  * @param allocator The memory allocation functions to use for the new tree.
  * @return The return code
  */
@@ -778,6 +801,8 @@ mkavl_rc_e
 mkavl_copy (mkavl_tree_handle source_tree_h, 
             mkavl_tree_handle *new_tree_h,
             mkavl_copy_fn copy_fn, mkavl_item_fn item_fn, 
+            bool use_source_context, void *new_context,
+            mkavl_delete_context_fn delete_context_fn,
             mkavl_allocator_st *allocator)
 {
     mkavl_tree_handle local_tree_h = NULL;
@@ -786,6 +811,8 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
     struct avl_traverser avl_t = {0};
     mkavl_copy_fn old_copy_fn, copy_fn_to_use;
     void *item, *existing_item;
+    void *context_to_use;
+    mkavl_delete_context_fn delete_context_fn_to_use;
     uint32_t i;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
 
@@ -809,9 +836,14 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
             cmp_fn_array[i] = source_tree_h->avl_tree_array[i].compare_fn;
         }
 
+        context_to_use = new_context;
+        if (use_source_context) {
+            context_to_use = source_tree_h->context;
+        }
+
         rc = mkavl_new(&local_tree_h,
                        cmp_fn_array, NELEMS(cmp_fn_array),
-                       source_tree_h->context, local_allocator);
+                       context_to_use, local_allocator);
         if (mkavl_rc_e_is_notok(rc)) {
             goto err_exit;
         }
@@ -861,8 +893,12 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
 err_exit:
 
     if (allocated_mkavl_tree) {
+        delete_context_fn_to_use = NULL;
+        if (!use_source_context) {
+            delete_context_fn_to_use = delete_context_fn;
+        }
         /* Just deleting the tree should clean everything up. */
-        mkavl_delete(&local_tree_h, item_fn);
+        mkavl_delete(&local_tree_h, item_fn, delete_context_fn_to_use);
     }
 
     return (rc);

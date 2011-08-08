@@ -180,14 +180,30 @@ typedef int32_t
 /**
  * Prototype for a function that is applied to every element for various
  * operations.
+ *
+ * @param item The item on which to operate
+ * @param context The client context
+ * @return The return code
  */
 typedef mkavl_rc_e
 (*mkavl_item_fn)(void *item, void *context);
 
 /**
+ * Prototype for a function that is a callback to the client to operate on its
+ * context when mkavl_delete() is called.
+ *
+ * @param context The client context
+ * @return The return code
+ */
+typedef mkavl_rc_e
+(*mkavl_delete_context_fn)(void *context);
+
+/**
  * Prototype for a function that is applied when copying items from an existing
  * tree to a new tree.
  *
+ * @param item Item to be copied
+ * @param context Client context for the tree
  * @return A pointer to the item to be placed into the new tree.
  */
 typedef void *
@@ -237,12 +253,15 @@ mkavl_new(mkavl_tree_handle *tree_h,
           void *context, mkavl_allocator_st *allocator);
 
 extern mkavl_rc_e
-mkavl_delete(mkavl_tree_handle *tree_h, mkavl_item_fn item_fn);
+mkavl_delete(mkavl_tree_handle *tree_h, mkavl_item_fn item_fn, 
+             mkavl_delete_context_fn delete_context_fn);
 
 extern mkavl_rc_e
 mkavl_copy(const mkavl_tree_handle source_tree_h, 
            mkavl_tree_handle *new_tree_h,
            mkavl_copy_fn copy_fn, mkavl_item_fn item_fn, 
+           bool use_source_context, void *new_context,
+           mkavl_delete_context_fn delete_context_fn,
            mkavl_allocator_st *allocator);
 
 extern mkavl_rc_e
