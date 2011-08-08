@@ -42,6 +42,10 @@ do { \
 #define NELEMS(x) (sizeof(x) / sizeof(x[0]))
 #endif
 
+#ifndef CT_ASSERT
+#define CT_ASSERT(e) extern char (*CT_ASSERT(void)) [sizeof(char[1 - 2*!(e)])]
+#endif
+
 static const uint32_t default_node_cnt = 15;
 static const uint32_t default_run_cnt = 15;
 static const uint8_t default_verbosity = 0;
@@ -219,25 +223,23 @@ uint32_t_cmp (const void *a, const void *b)
     return (0);
 }
 
+/*
+ * Assumes array is sorted.
+ */
 static uint32_t
 get_unique_count (uint32_t *array, size_t num_elem)
 {
-    uint32_t temp_array[num_elem];
     uint32_t count = 0;
     uint32_t cur_val;
     uint32_t i;
-    size_t size = (num_elem * sizeof(*array));
 
     if ((NULL == array) || (0 == num_elem)) {
         return (0);
     }
 
-    memcpy(temp_array, array, size);
-    qsort(temp_array, num_elem, sizeof(*array), uint32_t_cmp);
-
     for (i = 0; i < num_elem; ++i) {
-        if ((0 == i) || (temp_array[i] != cur_val)) {
-            cur_val = temp_array[i];
+        if ((0 == i) || (array[i] != cur_val)) {
+            cur_val = array[i];
             ++count;
         }
     }
@@ -245,13 +247,24 @@ get_unique_count (uint32_t *array, size_t num_elem)
     return (count);
 }
 
+typedef struct mkavl_test_input_st_ {
+    uint32_t *insert_seq;
+    uint32_t *delete_seq;
+    uint32_t *sorted_seq;
+    uint32_t uniq_cnt; 
+    uint32_t dup_cnt; 
+    const test_mkavl_opts_st *opts;
+    mkavl_tree_handle tree_h;
+    mkavl_tree_handle tree_copy_h;
+} mkavl_test_input_st;
+
 /* 
  * Do a forward declaration so we can keep all the AVL setup stuff separate
  * below main().
  */
 static bool
-run_mkavl_test(uint32_t *insert_seq, uint32_t *delete_seq, 
-               uint32_t uniq_cnt, test_mkavl_opts_st *opts);
+run_mkavl_test(mkavl_test_input_st *input);
+
 /**
  * Main function to test objects.
  */
@@ -263,6 +276,7 @@ main (int argc, char *argv[])
     uint32_t fail_count = 0;
     uint32_t i;
     uint32_t cur_run, cur_seed, uniq_cnt;
+    mkavl_test_input_st test_input = {0};
 
     parse_command_line(argc, argv, &opts);
 
@@ -271,6 +285,7 @@ main (int argc, char *argv[])
     for (cur_run = 0; cur_run < opts.run_cnt; ++cur_run) {
         uint32_t insert_seq[opts.node_cnt];
         uint32_t delete_seq[opts.node_cnt];
+        uint32_t sorted_seq[opts.node_cnt];
 
         printf("Doing run %u with seed %u\n", (cur_run + 1), cur_seed);
         srand(cur_seed);
@@ -279,7 +294,9 @@ main (int argc, char *argv[])
             insert_seq[i] = ((rand() % opts.range_end) + opts.range_start);
         }
         permute_array(insert_seq, delete_seq, opts.node_cnt);
-        uniq_cnt = get_unique_count(insert_seq, opts.node_cnt);
+        memcpy(sorted_seq, insert_seq, sizeof(sorted_seq));
+        qsort(sorted_seq, opts.node_cnt, sizeof(sorted_seq[0]), uint32_t_cmp);
+        uniq_cnt = get_unique_count(sorted_seq, opts.node_cnt);
 
         if (opts.verbosity >= 5) {
             printf("Unique count: %u\n", uniq_cnt);
@@ -296,7 +313,16 @@ main (int argc, char *argv[])
             printf("\n");
         }
 
-        was_success = run_mkavl_test(insert_seq, delete_seq, uniq_cnt, &opts);
+        test_input.insert_seq = insert_seq;
+        test_input.delete_seq = delete_seq;
+        test_input.sorted_seq = sorted_seq;
+        test_input.uniq_cnt = uniq_cnt;
+        test_input.dup_cnt = (opts.node_cnt - uniq_cnt);
+        test_input.opts = &opts;
+        test_input.tree_h = NULL;
+        test_input.tree_copy_h = NULL;
+
+        was_success = run_mkavl_test(&test_input);
         if (!was_success) {
             printf("FAILURE: the test has failed for seed %u!!!\n", cur_seed);
             ++fail_count;
@@ -379,82 +405,125 @@ typedef enum mkavl_test_key_e_ {
     MKAVL_TEST_KEY_E_MAX,
 } mkavl_test_key_e;
 
+const static mkavl_test_key_e mkavl_key_opposite[] = {
+    MKAVL_TEST_KEY_E_DESC,
+    MKAVL_TEST_KEY_E_ASC,
+};
+
+mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
+
+CT_ASSERT(NELEMS(mkavl_key_opposite) == MKAVL_TEST_KEY_E_MAX);
+CT_ASSERT(NELEMS(cmp_fn_array) == MKAVL_TEST_KEY_E_MAX);
+
 static bool
-run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq, 
-                uint32_t uniq_cnt, test_mkavl_opts_st *opts)
+mkavl_test_new_error (void)
 {
+    mkavl_rc_e rc;
     mkavl_tree_handle tree_h = NULL;
-    mkavl_tree_handle tree2_h = NULL;
-    mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
-    mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
-    uint32_t dup_cnt, null_cnt, non_null_cnt;;
-    uint32_t i, j;
-    uint32_t *existing_item;
 
-    if ((NULL == insert_seq) || (NULL == delete_seq) ||
-        (NULL == opts)) {
-        LOG_FAIL("invalid input");
-        return (false);
-    }
-    dup_cnt = (opts->node_cnt - uniq_cnt);
-
-    rc = mkavl_new(&tree_h, cmp_fn_array, NELEMS(cmp_fn_array),
-                   (void *) TEST_MKAVL_MAGIC, NULL);
-    if (mkavl_rc_e_is_notok(rc)) {
-        LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        goto err_exit;
-    }
-
-    /* Destroy an empty tree */
-    rc = mkavl_delete(&tree_h, NULL);
-    if (mkavl_rc_e_is_notok(rc)) {
-        LOG_FAIL("delete empty failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        goto err_exit;
-    }
-
-    rc = mkavl_new(&tree_h, cmp_fn_array, NELEMS(cmp_fn_array),
-                   (void *) TEST_MKAVL_MAGIC, NULL);
-    if (mkavl_rc_e_is_notok(rc)) {
-        LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        goto err_exit;
-    }
-
-    /* Test new error input */
     if (0 != mkavl_count(NULL)) {
         LOG_FAIL("NULL mkavl_count failed, mkavl_count(%u)", 
                  mkavl_count(NULL));
-        goto err_exit;
+        return (false);
     }
 
     rc = mkavl_new(NULL, cmp_fn_array, NELEMS(cmp_fn_array),
                    (void *) TEST_MKAVL_MAGIC, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("NULL tree failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        goto err_exit;
+        return (false);
     }
 
-    rc = mkavl_new(&tree2_h, NULL, NELEMS(cmp_fn_array),
+    rc = mkavl_new(&tree_h, NULL, NELEMS(cmp_fn_array),
                    (void *) TEST_MKAVL_MAGIC, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("NULL function failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        goto err_exit;
+        return (false);
     }
 
-    rc = mkavl_new(&tree2_h, cmp_fn_array, 0,
+    rc = mkavl_new(&tree_h, cmp_fn_array, 0,
                    (void *) TEST_MKAVL_MAGIC, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("zero size function failed, rc(%s)",
                  mkavl_rc_e_get_string(rc));
-        goto err_exit;
+        return (false);
     }
 
-    /* Add in all the items */
-    non_null_cnt = 0;
-    for (i = 0; i < opts->node_cnt; ++i) {
-        rc = mkavl_add(tree_h, &(insert_seq[i]), (void **) &existing_item);
+    return (true);
+}
+
+static bool
+mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
+{
+    mkavl_rc_e rc;
+
+    rc = mkavl_new(&(input->tree_h), cmp_fn_array, NELEMS(cmp_fn_array),
+                   (void *) TEST_MKAVL_MAGIC, allocator);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
+{
+    mkavl_rc_e rc;
+
+    rc = mkavl_delete(&(input->tree_h), item_fn);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("delete empty failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_add_error (mkavl_test_input_st *input)
+{
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    rc = mkavl_add(input->tree_h, &(input->insert_seq[0]), (void **) NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL existing item failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_add(input->tree_h, NULL, (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL item failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_add(NULL, &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL tree failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_add (mkavl_test_input_st *input)
+{
+    uint32_t i;
+    uint32_t non_null_cnt = 0;
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    for (i = 0; i < input->opts->node_cnt; ++i) {
+        rc = mkavl_add(input->tree_h, &(input->insert_seq[i]), 
+                       (void **) &existing_item);
         if (mkavl_rc_e_is_notok(rc)) {
             LOG_FAIL("add failed, rc(%s)", mkavl_rc_e_get_string(rc));
-            goto err_exit;
+            return (false);
         }
 
         if (NULL != existing_item) {
@@ -462,68 +531,418 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
         }
     }
 
-    if (non_null_cnt != dup_cnt) {
+    if (non_null_cnt != input->dup_cnt) {
         LOG_FAIL("duplidate check failed, non_null_cnt(%u) dup_cnt(%u)", 
-                 non_null_cnt, dup_cnt);
+                 non_null_cnt, input->dup_cnt);
+        return (false);
+    }
+
+    if (mkavl_count(input->tree_h) != input->uniq_cnt) {
+        LOG_FAIL("unique check failed, mkavl_count(%u) uniq_cnt(%u)", 
+                 mkavl_count(input->tree_h), input->uniq_cnt);
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_find_equal (mkavl_test_input_st *input)
+{
+    uint32_t *existing_item;
+    uint32_t i, j;
+    mkavl_rc_e rc;
+
+    for (i = 0; i < input->opts->node_cnt; ++i) {
+        for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
+            rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, j,
+                            &(input->insert_seq[i]), (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (NULL == existing_item) {
+                LOG_FAIL("find failed for %u", input->insert_seq[i]);
+                return (false);
+            }
+
+            if (*existing_item != input->insert_seq[i]) {
+                LOG_FAIL("find failed for %u, found %u", input->insert_seq[i],
+                         *existing_item);
+                return (false);
+            }
+        }
+    }
+    
+    return (true);
+}
+
+static bool
+mkavl_test_find_greater (mkavl_test_input_st *input, bool do_equal)
+{
+    mkavl_find_type_e type;
+    uint32_t *existing_item;
+    uint32_t rand_lookup_item;
+    uint32_t i, j;
+    mkavl_rc_e rc;
+
+    type = MKAVL_FIND_TYPE_E_GT;
+    if (do_equal) {
+        type = MKAVL_FIND_TYPE_E_GE;
+    }
+
+    for (i = 0; i < input->opts->node_cnt; ++i) {
+        for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
+            /* Do the operation on an existing item */
+            rc = mkavl_find(input->tree_h, type, j,
+                            &(input->insert_seq[i]), (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (do_equal) {
+                if (NULL == existing_item) {
+                    LOG_FAIL("find failed for %u", input->insert_seq[i]);
+                    return (false);
+                }
+
+                if (*existing_item != input->insert_seq[i]) {
+                    LOG_FAIL("find failed for %u, found %u",
+                             input->insert_seq[i],
+                             *existing_item);
+                    return (false);
+                }
+            } else {
+                // TODO
+            }
+
+            /* Do the operation on a (potentially) non-existing item */
+            rand_lookup_item = ((rand() % input->opts->range_end) + 
+                                input->opts->range_start);
+            rc = mkavl_find(input->tree_h, type, j,
+                            &rand_lookup_item, (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+            // TODO
+        }
+    }
+    
+    return (true);
+}
+
+static bool
+mkavl_test_find_error (mkavl_test_input_st *input)
+{
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    rc = mkavl_find(NULL, MKAVL_FIND_TYPE_E_EQUAL, MKAVL_TEST_KEY_E_ASC,
+                    &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL tree failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_find(input->tree_h, (MKAVL_FIND_TYPE_E_MAX + 1), 
+                    MKAVL_TEST_KEY_E_ASC,
+                    &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Invalid type failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                    MKAVL_TEST_KEY_E_MAX,
+                    &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Invalid key index failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL,
+                    MKAVL_TEST_KEY_E_ASC, NULL, (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL item failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL,
+                    MKAVL_TEST_KEY_E_ASC, &(input->insert_seq[0]), NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("NULL item failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_add_remove_key (mkavl_test_input_st *input)
+{
+    uint32_t i, j;
+    uint32_t non_null_cnt, null_cnt;
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    for (i = 0; i < MKAVL_TEST_KEY_E_MAX; ++i) {
+        /* Take them all out for one key */
+        non_null_cnt = 0;
+        for (j = 0; j < input->opts->node_cnt; ++j) {
+            rc = mkavl_remove_key_idx(input->tree_h, i, 
+                                      &(input->delete_seq[j]), 
+                                      (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("remove key idx failed, rc(%s)", 
+                         mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (NULL != existing_item) {
+                ++non_null_cnt;
+            }
+
+            rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, i,
+                            &(input->delete_seq[j]), (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (NULL != existing_item) {
+                LOG_FAIL("found item expected to be deleted, %u", 
+                         input->delete_seq[j]);
+                return (false);
+            }
+
+            rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                            mkavl_key_opposite[i],
+                            &(input->delete_seq[j]), (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (NULL == existing_item) {
+                LOG_FAIL("did not find item, %u", input->delete_seq[j]);
+                return (false);
+            }
+        }
+
+        if (non_null_cnt != input->uniq_cnt) {
+            LOG_FAIL("unique check failed, non_null_cnt(%u) uniq_cnt(%u)", 
+                     non_null_cnt, input->uniq_cnt);
+            return (false);
+        }
+
+        /* Tree count should remain unchanged */
+        if (mkavl_count(input->tree_h) != input->uniq_cnt) {
+            LOG_FAIL("unique check failed, mkavl_count(%u) uniq_cnt(%u)", 
+                     mkavl_count(input->tree_h), input->uniq_cnt);
+            return (false);
+        }
+
+        /* Put them all back in for the key */
+        null_cnt = 0;
+        for (j = 0; j < input->opts->node_cnt; ++j) {
+            rc = mkavl_add_key_idx(input->tree_h, i, &(input->insert_seq[j]), 
+                                   (void **) &existing_item);
+            if (mkavl_rc_e_is_notok(rc)) {
+                LOG_FAIL("add key idx failed, rc(%s)", 
+                         mkavl_rc_e_get_string(rc));
+                return (false);
+            }
+
+            if (NULL == existing_item) {
+                ++null_cnt;
+            }
+        }
+
+        if (null_cnt != input->uniq_cnt) {
+            LOG_FAIL("unique check failed, null_cnt(%u) uniq_cnt(%u)", 
+                     null_cnt, input->uniq_cnt);
+            return (false);
+        }
+
+        /* Tree count should remain unchanged */
+        if (mkavl_count(input->tree_h) != input->uniq_cnt) {
+            LOG_FAIL("unique check failed, mkavl_count(%u) uniq_cnt(%u)", 
+                     mkavl_count(input->tree_h), input->uniq_cnt);
+            return (false);
+        }
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_add_key_error (mkavl_test_input_st *input)
+{
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    rc = mkavl_add_key_idx(NULL, MKAVL_TEST_KEY_E_ASC,
+                           &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_add_key_idx(input->tree_h, MKAVL_TEST_KEY_E_MAX,
+                           &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_add_key_idx(input->tree_h, MKAVL_TEST_KEY_E_ASC,
+                           NULL, (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_add_key_idx(input->tree_h, MKAVL_TEST_KEY_E_ASC,
+                           &(input->insert_seq[0]), NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+mkavl_test_remove_key_error (mkavl_test_input_st *input)
+{
+    uint32_t *existing_item;
+    mkavl_rc_e rc;
+
+    rc = mkavl_remove_key_idx(NULL, MKAVL_TEST_KEY_E_ASC,
+                           &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_remove_key_idx(input->tree_h, MKAVL_TEST_KEY_E_MAX,
+                           &(input->insert_seq[0]), (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_remove_key_idx(input->tree_h, MKAVL_TEST_KEY_E_ASC,
+                           NULL, (void **) &existing_item);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    rc = mkavl_remove_key_idx(input->tree_h, MKAVL_TEST_KEY_E_ASC,
+                           &(input->insert_seq[0]), NULL);
+    if (mkavl_rc_e_is_ok(rc)) {
+        LOG_FAIL("Key index operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    return (true);
+}
+
+static bool
+run_mkavl_test (mkavl_test_input_st *input)
+{
+    bool test_rc;
+
+    if (NULL == input) {
+        LOG_FAIL("invalid input");
+        return (false);
+    }
+
+    test_rc = mkavl_test_new(input, NULL);
+    if (!test_rc) {
         goto err_exit;
     }
 
-    if (mkavl_count(tree_h) != uniq_cnt) {
-        LOG_FAIL("unique check failed, mkavl_count(%u) uniq_cnt(%u)", 
-                 mkavl_count(tree_h), uniq_cnt);
+    /* Destroy an empty tree */
+    test_rc = mkavl_test_delete(input, NULL);
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    test_rc = mkavl_test_new(input, NULL);
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    /* Test new error input */
+    test_rc = mkavl_test_new_error();
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    /* Add in all the items */
+    test_rc = mkavl_test_add(input);
+    if (!test_rc) {
         goto err_exit;
     }
 
     /* Test add error input */
-    rc = mkavl_add(tree_h, &(insert_seq[0]), (void **) NULL);
-    if (mkavl_rc_e_is_ok(rc)) {
-        LOG_FAIL("NULL existing item failed, rc(%s)",
-                 mkavl_rc_e_get_string(rc));
-        goto err_exit;
-    }
-
-    rc = mkavl_add(tree_h, NULL, (void **) &existing_item);
-    if (mkavl_rc_e_is_ok(rc)) {
-        LOG_FAIL("NULL item failed, rc(%s)",
-                 mkavl_rc_e_get_string(rc));
-        goto err_exit;
-    }
-
-    rc = mkavl_add(NULL, &(insert_seq[0]), (void **) &existing_item);
-    if (mkavl_rc_e_is_ok(rc)) {
-        LOG_FAIL("NULL tree failed, rc(%s)",
-                 mkavl_rc_e_get_string(rc));
+    test_rc = mkavl_test_add_error(input);
+    if (!test_rc) {
         goto err_exit;
     }
 
     /* Test finding equal items */
-    for (i = 0; i < opts->node_cnt; ++i) {
-        for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
-            rc = mkavl_find(tree_h, MKAVL_FIND_TYPE_E_EQUAL, j,
-                            &(insert_seq[i]), (void **) &existing_item);
-            if (mkavl_rc_e_is_notok(rc)) {
-                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
-                goto err_exit;
-            }
-
-            if (NULL == existing_item) {
-                LOG_FAIL("find failed for %u", insert_seq[i]);
-                goto err_exit;
-            }
-
-            if (*existing_item != insert_seq[i]) {
-                LOG_FAIL("find failed for %u, found %u", insert_seq[i],
-                         *existing_item);
-                goto err_exit;
-            }
-        }
+    test_rc = mkavl_test_find_equal(input);
+    if (!test_rc) {
+        goto err_exit;
     }
 
     /* Test all types of find */
+    test_rc = mkavl_test_find_greater(input, false);
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    test_rc = mkavl_test_find_greater(input, true);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
     /* Test find error input */
+    test_rc = mkavl_test_find_error(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
-    /* Test find and add/remove from thread */
+    /* Test find and add/remove from key */
+    test_rc = mkavl_test_add_remove_key(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    /* Test add/remove idx error conditions */
+    test_rc = mkavl_test_add_key_error(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
+
+    test_rc = mkavl_test_remove_key_error(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
     /* Copy tree: make sure copy fn is called as expected, test user defined
      * allocator here and in new */
@@ -536,7 +955,6 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
     /* Do walk over trees */
 
     /* Delete items from one tree */
-    null_cnt = 0;
 
     /* Destroy other tree: make sure destroy is called as expected */
 
@@ -544,11 +962,8 @@ run_mkavl_test (uint32_t *insert_seq, uint32_t *delete_seq,
 
 err_exit:
 
-    if (NULL != tree_h) {
-        rc = mkavl_delete(&tree_h, NULL);
-        if (mkavl_rc_e_is_notok(rc)) {
-            LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        }
+    if (NULL != input->tree_h) {
+        mkavl_test_delete(input, NULL);
     }
 
     return (false);
