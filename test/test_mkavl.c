@@ -468,11 +468,12 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
 }
 
 static bool
-mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
+mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn,
+                   mkavl_delete_context_fn delete_context_fn)
 {
     mkavl_rc_e rc;
 
-    rc = mkavl_delete(&(input->tree_h), item_fn);
+    rc = mkavl_delete(&(input->tree_h), item_fn, delete_context_fn);
     if (mkavl_rc_e_is_notok(rc)) {
         LOG_FAIL("delete empty failed, rc(%s)", mkavl_rc_e_get_string(rc));
         return (false);
@@ -876,7 +877,7 @@ run_mkavl_test (mkavl_test_input_st *input)
     }
 
     /* Destroy an empty tree */
-    test_rc = mkavl_test_delete(input, NULL);
+    test_rc = mkavl_test_delete(input, NULL, NULL);
     if (!test_rc) {
         goto err_exit;
     }
@@ -963,7 +964,7 @@ run_mkavl_test (mkavl_test_input_st *input)
 err_exit:
 
     if (NULL != input->tree_h) {
-        mkavl_test_delete(input, NULL);
+        mkavl_test_delete(input, NULL, NULL);
     }
 
     return (false);
