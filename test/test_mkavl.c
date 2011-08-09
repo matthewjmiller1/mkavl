@@ -46,6 +46,8 @@ do { \
 #define CT_ASSERT(e) extern char (*CT_ASSERT(void)) [sizeof(char[1 - 2*!(e)])]
 #endif
 
+#define MKAVL_TEST_RUNAWAY_SANITY 100000
+
 static const uint32_t default_node_cnt = 15;
 static const uint32_t default_run_cnt = 15;
 static const uint8_t default_verbosity = 0;
@@ -298,7 +300,7 @@ main (int argc, char *argv[])
         qsort(sorted_seq, opts.node_cnt, sizeof(sorted_seq[0]), uint32_t_cmp);
         uniq_cnt = get_unique_count(sorted_seq, opts.node_cnt);
 
-        if (opts.verbosity >= 5) {
+        if (opts.verbosity >= 1) {
             printf("Unique count: %u\n", uniq_cnt);
             printf("Insertion sequence:\n  ");
             for (i = 0; i < opts.node_cnt; ++i) {
@@ -309,6 +311,12 @@ main (int argc, char *argv[])
             printf("Deletion sequence:\n  ");
             for (i = 0; i < opts.node_cnt; ++i) {
                 printf(" %u", delete_seq[i]);
+            }
+            printf("\n");
+
+            printf("Sorted sequence:\n  ");
+            for (i = 0; i < opts.node_cnt; ++i) {
+                printf(" %u", sorted_seq[i]);
             }
             printf("\n");
         }
@@ -405,7 +413,7 @@ typedef enum mkavl_test_key_e_ {
     MKAVL_TEST_KEY_E_MAX,
 } mkavl_test_key_e;
 
-const static mkavl_test_key_e mkavl_key_opposite[] = {
+static const mkavl_test_key_e mkavl_key_opposite[] = {
     MKAVL_TEST_KEY_E_DESC,
     MKAVL_TEST_KEY_E_ASC,
 };
@@ -414,6 +422,18 @@ mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
 
 CT_ASSERT(NELEMS(mkavl_key_opposite) == MKAVL_TEST_KEY_E_MAX);
 CT_ASSERT(NELEMS(cmp_fn_array) == MKAVL_TEST_KEY_E_MAX);
+
+static const mkavl_find_type_e 
+mkavl_key_find_type[MKAVL_TEST_KEY_E_MAX][(MKAVL_FIND_TYPE_E_MAX + 1)] = {
+    { MKAVL_FIND_TYPE_E_INVALID, MKAVL_FIND_TYPE_E_EQUAL,
+      MKAVL_FIND_TYPE_E_GT, MKAVL_FIND_TYPE_E_LT,
+      MKAVL_FIND_TYPE_E_GE, MKAVL_FIND_TYPE_E_LE,
+      MKAVL_FIND_TYPE_E_MAX },
+    { MKAVL_FIND_TYPE_E_INVALID, MKAVL_FIND_TYPE_E_EQUAL,
+      MKAVL_FIND_TYPE_E_LT, MKAVL_FIND_TYPE_E_GT,
+      MKAVL_FIND_TYPE_E_LE, MKAVL_FIND_TYPE_E_GE,
+      MKAVL_FIND_TYPE_E_MAX }
+};
 
 static bool
 mkavl_test_new_error (void)
@@ -473,10 +493,20 @@ mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn,
 {
     mkavl_rc_e rc;
 
-    rc = mkavl_delete(&(input->tree_h), item_fn, delete_context_fn);
-    if (mkavl_rc_e_is_notok(rc)) {
-        LOG_FAIL("delete empty failed, rc(%s)", mkavl_rc_e_get_string(rc));
-        return (false);
+    if (NULL != input->tree_h) {
+        rc = mkavl_delete(&(input->tree_h), item_fn, delete_context_fn);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
+            return (false);
+        }
+    }
+
+    if (NULL != input->tree_copy_h) {
+        rc = mkavl_delete(&(input->tree_copy_h), item_fn, delete_context_fn);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
+            return (false);
+        }
     }
 
     return (true);
@@ -547,88 +577,213 @@ mkavl_test_add (mkavl_test_input_st *input)
     return (true);
 }
 
-static bool
-mkavl_test_find_equal (mkavl_test_input_st *input)
+static uint32_t *
+mkavl_test_find_val (mkavl_test_input_st *input,
+                     uint32_t val, mkavl_find_type_e type)
 {
-    uint32_t *existing_item;
-    uint32_t i, j;
-    mkavl_rc_e rc;
+    int32_t lo, hi, mid;
+    uint32_t runaway_counter = 0;
+    bool is_equal_type, is_greater_type, is_less_type;
+    size_t num_elems = input->opts->node_cnt;
 
-    for (i = 0; i < input->opts->node_cnt; ++i) {
-        for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
-            rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, j,
-                            &(input->insert_seq[i]), (void **) &existing_item);
-            if (mkavl_rc_e_is_notok(rc)) {
-                LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
-                return (false);
-            }
-
-            if (NULL == existing_item) {
-                LOG_FAIL("find failed for %u", input->insert_seq[i]);
-                return (false);
-            }
-
-            if (*existing_item != input->insert_seq[i]) {
-                LOG_FAIL("find failed for %u, found %u", input->insert_seq[i],
-                         *existing_item);
-                return (false);
-            }
-        }
+    if (0 == num_elems) {
+        return (NULL);
     }
     
-    return (true);
+    if (!mkavl_find_type_e_is_valid(type)) {
+        return (NULL);
+    }
+
+    is_equal_type = ((MKAVL_FIND_TYPE_E_EQUAL == type) ||
+                     (MKAVL_FIND_TYPE_E_GE == type) ||
+                     (MKAVL_FIND_TYPE_E_LE == type));
+
+    is_greater_type = ((MKAVL_FIND_TYPE_E_GT == type) ||
+                       (MKAVL_FIND_TYPE_E_GE == type));
+
+    is_less_type = ((MKAVL_FIND_TYPE_E_LT == type) ||
+                    (MKAVL_FIND_TYPE_E_LE == type));
+
+    lo = 0; 
+    hi = (num_elems - 1);
+    while (lo <= hi) {
+        mid = (lo + ((hi - lo) / 2));
+        if (input->opts->verbosity >= 6) {
+            printf("lo(%d) hi(%d) mid(%d) val(%u) arrayval(%u) type(%s)\n",
+                   lo, hi, mid, val, input->sorted_seq[mid],
+                   mkavl_find_type_e_get_string(type));
+        }
+        if (is_equal_type && (input->sorted_seq[mid] == val)) {
+            return &(input->sorted_seq[mid]);
+        }
+
+        if (is_greater_type && ((val >= input->sorted_seq[mid]) || 
+                                (0 == mid))) {
+            if ((mid + 1) >= num_elems) {
+                return (NULL);
+            }
+
+            if ((0 == mid) && (val < input->sorted_seq[mid])) {
+                return &(input->sorted_seq[mid]);
+            }
+
+            if (val < input->sorted_seq[mid + 1]) {
+                return &(input->sorted_seq[mid + 1]);
+            }
+        }
+
+        if (is_less_type && ((val <= input->sorted_seq[mid]) ||
+                             (mid == (num_elems - 1)))) {
+            if (0 == mid) {
+                return (NULL);
+            }
+
+            if ((mid == (num_elems - 1)) && (val > input->sorted_seq[mid])) {
+                return &(input->sorted_seq[mid]);
+            }
+
+            if (val > input->sorted_seq[mid - 1]) {
+                return &(input->sorted_seq[mid - 1]);
+            }
+        }
+
+        if (input->sorted_seq[mid] == val) {
+            if (is_greater_type) {
+                lo = (mid + 1);
+            }
+
+            if (is_less_type) {
+                hi = (mid - 1);
+            }
+        } else if (val > input->sorted_seq[mid]) {
+            lo = (mid + 1);
+        } else {
+            hi = (mid - 1);
+            if (is_greater_type) {
+                hi = mid;
+            }
+        }
+
+        if (++runaway_counter > MKAVL_TEST_RUNAWAY_SANITY) {
+            abort();
+        }
+    }
+
+    if (input->opts->verbosity >= 6) {
+        printf("lo(%d) hi(%d)\n", lo, hi);
+    }
+
+    return (NULL);
 }
 
 static bool
-mkavl_test_find_greater (mkavl_test_input_st *input, bool do_equal)
+mkavl_test_find (mkavl_test_input_st *input, mkavl_find_type_e type)
 {
-    mkavl_find_type_e type;
-    uint32_t *existing_item;
-    uint32_t rand_lookup_item;
+    uint32_t *existing_item, *array_item;
+    uint32_t rand_lookup_val;
     uint32_t i, j;
     mkavl_rc_e rc;
+    bool is_equal_type;
 
-    type = MKAVL_FIND_TYPE_E_GT;
-    if (do_equal) {
-        type = MKAVL_FIND_TYPE_E_GE;
-    }
+    is_equal_type = ((MKAVL_FIND_TYPE_E_EQUAL == type) ||
+                     (MKAVL_FIND_TYPE_E_GE == type) ||
+                     (MKAVL_FIND_TYPE_E_LE == type));
 
     for (i = 0; i < input->opts->node_cnt; ++i) {
         for (j = 0; j < MKAVL_TEST_KEY_E_MAX; ++j) {
             /* Do the operation on an existing item */
-            rc = mkavl_find(input->tree_h, type, j,
+            rc = mkavl_find(input->tree_h, mkavl_key_find_type[j][type], j,
                             &(input->insert_seq[i]), (void **) &existing_item);
             if (mkavl_rc_e_is_notok(rc)) {
                 LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
                 return (false);
             }
 
-            if (do_equal) {
+            if (is_equal_type) {
                 if (NULL == existing_item) {
-                    LOG_FAIL("find failed for %u", input->insert_seq[i]);
+                    LOG_FAIL("find failed for %u, type %s", 
+                             input->insert_seq[i],
+                             mkavl_find_type_e_get_string(type));
                     return (false);
                 }
 
                 if (*existing_item != input->insert_seq[i]) {
-                    LOG_FAIL("find failed for %u, found %u",
+                    LOG_FAIL("find failed for %u, found %u type %s",
                              input->insert_seq[i],
-                             *existing_item);
+                             *existing_item,
+                             mkavl_find_type_e_get_string(type));
                     return (false);
                 }
-            } else {
-                // TODO
+            }
+
+            /* 
+             * Make sure what we founds matches a binary search on
+             * the sorted array.
+             */
+            array_item = mkavl_test_find_val(input, input->insert_seq[i], type);
+            if (((NULL == existing_item) && (NULL != array_item)) ||
+                ((NULL != existing_item) && (NULL == array_item)) ||
+                ((NULL != existing_item) && (NULL != array_item) &&
+                 (*existing_item != *array_item))) {
+                LOG_FAIL("mismatch in array and AVL find for %u, AVL(%p) %u "
+                         "array(%p) %u type %s key %u",
+                         input->insert_seq[i],
+                         existing_item,
+                         (NULL == existing_item) ? 0 : *existing_item, 
+                         array_item,
+                         (NULL == array_item) ? 0 : *array_item, 
+                         mkavl_find_type_e_get_string(type), j);
+                return (false);
+            }
+
+            if (input->opts->verbosity >= 5) {
+                printf("find for type %s and key %u for %u, AVL(%p) %u "
+                       "array(%p) %u\n",
+                       mkavl_find_type_e_get_string(type),
+                       j, input->insert_seq[i],
+                       existing_item,
+                       (NULL == existing_item) ? 0 : *existing_item, 
+                       array_item,
+                       (NULL == array_item) ? 0 : *array_item);
             }
 
             /* Do the operation on a (potentially) non-existing item */
-            rand_lookup_item = ((rand() % input->opts->range_end) + 
+            rand_lookup_val = ((rand() % input->opts->range_end) + 
                                 input->opts->range_start);
-            rc = mkavl_find(input->tree_h, type, j,
-                            &rand_lookup_item, (void **) &existing_item);
+            rc = mkavl_find(input->tree_h, mkavl_key_find_type[j][type], j,
+                            &rand_lookup_val, (void **) &existing_item);
             if (mkavl_rc_e_is_notok(rc)) {
                 LOG_FAIL("find failed, rc(%s)", mkavl_rc_e_get_string(rc));
                 return (false);
             }
-            // TODO
+
+            array_item = mkavl_test_find_val(input, rand_lookup_val, type);
+            if (((NULL == existing_item) && (NULL != array_item)) ||
+                ((NULL != existing_item) && (NULL == array_item)) ||
+                ((NULL != existing_item) && (NULL != array_item) &&
+                 (*existing_item != *array_item))) {
+                LOG_FAIL("mismatch in array and AVL find for %u, AVL(%p) %u "
+                         "array(%p) %u type %s key %u",
+                         rand_lookup_val,
+                         existing_item,
+                         (NULL == existing_item) ? 0 : *existing_item, 
+                         array_item,
+                         (NULL == array_item) ? 0 : *array_item, 
+                         mkavl_find_type_e_get_string(type), j);
+                return (false);
+            }
+
+            if (input->opts->verbosity >= 5) {
+                printf("find for type %s and key %u for %u, AVL(%p) %u "
+                       "array(%p) %u\n",
+                       mkavl_find_type_e_get_string(type),
+                       j, rand_lookup_val,
+                       existing_item,
+                       (NULL == existing_item) ? 0 : *existing_item, 
+                       array_item,
+                       (NULL == array_item) ? 0 : *array_item);
+            }
+
         }
     }
     
@@ -862,8 +1017,20 @@ mkavl_test_remove_key_error (mkavl_test_input_st *input)
 }
 
 static bool
+mkavl_test_copy (mkavl_test_input_st *input)
+{
+    /* 
+     * Copy tree: make sure copy fn is called as expected, test user defined
+     * allocator here and in new.
+     */
+
+    return (true);
+}
+
+static bool
 run_mkavl_test (mkavl_test_input_st *input)
 {
+    mkavl_find_type_e find_type;
     bool test_rc;
 
     if (NULL == input) {
@@ -905,21 +1072,13 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
-    /* Test finding equal items */
-    test_rc = mkavl_test_find_equal(input);
-    if (!test_rc) {
-        goto err_exit;
-    }
-
     /* Test all types of find */
-    test_rc = mkavl_test_find_greater(input, false);
-    if (!test_rc) {
-        goto err_exit;
-    }
-
-    test_rc = mkavl_test_find_greater(input, true);
-    if (!test_rc) {
-        goto err_exit;
+    for (find_type = MKAVL_FIND_TYPE_E_FIRST; find_type < MKAVL_FIND_TYPE_E_MAX;
+         ++find_type) {
+        test_rc = mkavl_test_find(input, find_type);
+        if (!test_rc) {
+            goto err_exit;
+        }
     }
 
     /* Test find error input */
@@ -945,8 +1104,11 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
-    /* Copy tree: make sure copy fn is called as expected, test user defined
-     * allocator here and in new */
+    /* Test copying a tree */
+    test_rc = mkavl_test_copy(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
     /* 
      * Iterate over both trees, make sure order is the same, everything is less
