@@ -132,6 +132,8 @@ typedef enum mkavl_find_type_e_ {
     MKAVL_FIND_TYPE_E_INVALID,
     /** Find an item equal to */
     MKAVL_FIND_TYPE_E_EQUAL,
+    /** First valid find type */
+    MKAVL_FIND_TYPE_E_FIRST = MKAVL_FIND_TYPE_E_EQUAL,
     /** Find an item greater than */
     MKAVL_FIND_TYPE_E_GT,
     /** Find an item less than */
