@@ -1426,7 +1426,8 @@ mkavl_count (mkavl_tree_handle tree_h)
 }
 
 /**
- * Walk every node in the tree, calling the given function for each item.
+ * Walk every node in the tree, calling the given function for each item.  There
+ * is no guarantee on the order of the walk.
  *
  * @param tree_h The tree to walk.
  * @param cb_fn The callback function to apply to each item.
