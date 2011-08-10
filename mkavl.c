@@ -781,7 +781,8 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn,
  * before it is copied to the new tree.  This is applied once per item
  * regardless of how many AVL trees there are.  E.g., this may allocate a deep
  * copy of the data.  If NULL, then a shallow copy of the data is copied to the
- * new tree.
+ * new tree.  Note that this function is called with the source tree's context
+ * value.
  * @param item_fn If there is an error copying the new tree, this function is
  * applied to all items in the new tree as it is destroyed.  E.g., this may be a
  * function to free the data.
