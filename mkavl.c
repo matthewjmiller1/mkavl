@@ -871,6 +871,9 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
             goto err_exit;
         }
 
+        local_tree_h->item_count = 
+            avl_count(local_tree_h->avl_tree_array[0].tree);
+
         if (local_tree_h->avl_tree_count > 1) {
             item = avl_t_first(&avl_t, local_tree_h->avl_tree_array[0].tree);
             while (NULL != item) {
