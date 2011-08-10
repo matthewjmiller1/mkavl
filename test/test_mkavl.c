@@ -1356,6 +1356,75 @@ cleanup:
     return (retval);
 }
 
+typedef struct mkavl_test_walk_ctx_st_ {
+    uint32_t magic;
+    uint32_t walk_node_cnt;
+    uint32_t walk_stop_cnt;
+} mkavl_test_walk_ctx_st;
+
+static mkavl_rc_e
+mkavl_test_walk_cb (void *item, void *tree_context, void *walk_context,
+                    bool *stop_walk)
+{
+    mkavl_test_walk_ctx_st *walk_ctx = (mkavl_test_walk_ctx_st *) walk_context;
+    mkavl_test_ctx_st *tree_ctx = (mkavl_test_ctx_st *) tree_context;
+
+    if ((NULL == item) || (NULL == walk_ctx) || (NULL == tree_ctx) ||
+        (NULL == stop_walk) || (MKAVL_TEST_MAGIC != walk_ctx->magic) ||
+        (MKAVL_TEST_MAGIC != tree_ctx->magic)) {
+        abort();
+    }
+
+    if (walk_ctx->walk_stop_cnt == walk_ctx->walk_node_cnt) {
+        *stop_walk = true;
+    } else {
+        ++(walk_ctx->walk_node_cnt);
+    }
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
+static bool
+mkavl_test_walk (mkavl_test_input_st *input)
+{
+    mkavl_test_walk_ctx_st walk_ctx = {0};
+    mkavl_rc_e rc;
+    
+    walk_ctx.magic = MKAVL_TEST_MAGIC;
+    /* Set it high enough that this walk will go all the way */
+    walk_ctx.walk_stop_cnt = input->uniq_cnt;
+    rc = mkavl_walk(input->tree_h, mkavl_test_walk_cb, &walk_ctx); 
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("walk failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    if (walk_ctx.walk_node_cnt != walk_ctx.walk_stop_cnt) {
+        LOG_FAIL("unexpected walk count, walk_node_cnt(%u) stop_cnt(%u)", 
+                 walk_ctx.walk_node_cnt, walk_ctx.walk_stop_cnt);
+        return (false);
+    }
+
+    walk_ctx.walk_node_cnt = 0;
+    /* Set it high enough that this walk will go all the way */
+    walk_ctx.walk_stop_cnt = (rand() %  input->uniq_cnt);
+    rc = mkavl_walk(input->tree_copy_h, mkavl_test_walk_cb, &walk_ctx); 
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("walk failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    if (walk_ctx.walk_node_cnt != walk_ctx.walk_stop_cnt) {
+        LOG_FAIL("unexpected walk count, walk_node_cnt(%u) stop_cnt(%u)", 
+                 walk_ctx.walk_node_cnt, walk_ctx.walk_stop_cnt);
+        return (false);
+    }
+
+    walk_ctx.magic = 0;
+
+    return (true);
+}
+
 static bool
 run_mkavl_test (mkavl_test_input_st *input)
 {
@@ -1450,6 +1519,10 @@ run_mkavl_test (mkavl_test_input_st *input)
     }
 
     /* Do walk over trees */
+    test_rc = mkavl_test_walk(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
     /* Delete items from one tree */
 
