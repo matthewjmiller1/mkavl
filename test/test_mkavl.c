@@ -351,7 +351,34 @@ main (int argc, char *argv[])
 
 /* AVL operation functions */
 
-#define TEST_MKAVL_MAGIC 0x1234ABCD
+#define MKAVL_TEST_MAGIC 0x1234ABCD
+
+typedef struct mkavl_test_ctx_st_ {
+    uint32_t magic;
+} mkavl_test_ctx_st;
+
+static uint32_t mkavl_copy_cnt = 0;
+static uint32_t mkavl_copy_malloc_cnt = 0;
+static uint32_t mkavl_copy_free_cnt = 0;
+
+static void *
+mkavl_test_copy_malloc (size_t size)
+{
+    ++mkavl_copy_malloc_cnt;
+    return (malloc(size));
+}
+
+static void
+mkavl_test_copy_free (void *ptr)
+{
+    ++mkavl_copy_free_cnt;
+    free(ptr);
+}
+
+mkavl_allocator_st copy_allocator = {
+    mkavl_test_copy_malloc,
+    mkavl_test_copy_free
+};
 
 /**
  * Simply compare the uint32_t values.
@@ -366,8 +393,11 @@ mkavl_cmp_fn1 (const void *item1, const void *item2, void *context)
 {
     const uint32_t *i1 = item1;
     const uint32_t *i2 = item2;
+    mkavl_test_ctx_st *ctx;
 
-    if (TEST_MKAVL_MAGIC != (uintptr_t) context) {
+    ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
         abort();
     }
 
@@ -393,8 +423,11 @@ mkavl_cmp_fn2 (const void *item1, const void *item2, void *context)
 {
     const uint32_t *i1 = item1;
     const uint32_t *i2 = item2;
+    mkavl_test_ctx_st *ctx;
 
-    if (TEST_MKAVL_MAGIC != (uintptr_t) context) {
+    ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
         abort();
     }
 
@@ -447,22 +480,19 @@ mkavl_test_new_error (void)
         return (false);
     }
 
-    rc = mkavl_new(NULL, cmp_fn_array, NELEMS(cmp_fn_array),
-                   (void *) TEST_MKAVL_MAGIC, NULL);
+    rc = mkavl_new(NULL, cmp_fn_array, NELEMS(cmp_fn_array), NULL, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("NULL tree failed, rc(%s)", mkavl_rc_e_get_string(rc));
         return (false);
     }
 
-    rc = mkavl_new(&tree_h, NULL, NELEMS(cmp_fn_array),
-                   (void *) TEST_MKAVL_MAGIC, NULL);
+    rc = mkavl_new(&tree_h, NULL, NELEMS(cmp_fn_array), NULL, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("NULL function failed, rc(%s)", mkavl_rc_e_get_string(rc));
         return (false);
     }
 
-    rc = mkavl_new(&tree_h, cmp_fn_array, 0,
-                   (void *) TEST_MKAVL_MAGIC, NULL);
+    rc = mkavl_new(&tree_h, cmp_fn_array, 0, NULL, NULL);
     if (mkavl_rc_e_is_ok(rc)) {
         LOG_FAIL("zero size function failed, rc(%s)",
                  mkavl_rc_e_get_string(rc));
@@ -476,9 +506,17 @@ static bool
 mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
 {
     mkavl_rc_e rc;
+    mkavl_test_ctx_st *ctx;
+
+    ctx = calloc(1, sizeof(*ctx));
+    if (NULL == ctx) {
+        LOG_FAIL("calloc failed");
+        return (false);
+    }
+    ctx->magic = MKAVL_TEST_MAGIC;
 
     rc = mkavl_new(&(input->tree_h), cmp_fn_array, NELEMS(cmp_fn_array),
-                   (void *) TEST_MKAVL_MAGIC, allocator);
+                   ctx, allocator);
     if (mkavl_rc_e_is_notok(rc)) {
         LOG_FAIL("new failed, rc(%s)", mkavl_rc_e_get_string(rc));
         return (false);
@@ -1016,15 +1054,306 @@ mkavl_test_remove_key_error (mkavl_test_input_st *input)
     return (true);
 }
 
+static void *
+mkavl_test_copy_fn (void *item, void *context)
+{
+    uint32_t *orig_item = (uint32_t *) item;
+    uint32_t *new_item;
+    mkavl_test_ctx_st *ctx;
+
+    ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
+        abort();
+    }
+    ++mkavl_copy_cnt;
+
+    if (NULL == orig_item) {
+        return (NULL);
+    }
+
+    new_item = malloc(sizeof(*new_item));
+    if (NULL != new_item) {
+        *new_item = *orig_item;
+    }
+
+    return (new_item);
+}
+
+static mkavl_rc_e
+mkavl_test_delete_context (void *context)
+{
+    if (NULL == context) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    free(context);
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
 static bool
 mkavl_test_copy (mkavl_test_input_st *input)
 {
-    /* 
-     * Copy tree: make sure copy fn is called as expected, test user defined
-     * allocator here and in new.
-     */
+    mkavl_rc_e rc;
+    mkavl_test_ctx_st *ctx;
+
+    ctx = calloc(1, sizeof(*ctx));
+    if (NULL == ctx) {
+        LOG_FAIL("calloc failed");
+        return (false);
+    }
+    ctx->magic = MKAVL_TEST_MAGIC;
+
+    rc = mkavl_copy(input->tree_h,
+                    &(input->tree_copy_h),
+                    mkavl_test_copy_fn, NULL, false, ctx,
+                    mkavl_test_delete_context,
+                    &copy_allocator);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("copy failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        return (false);
+    }
+
+    if (mkavl_copy_cnt != input->uniq_cnt) {
+        LOG_FAIL("unexpected copy count, copy count %u "
+                 "unique count %u)", mkavl_copy_cnt, input->uniq_cnt);
+        return (false);
+    }
+
+    if (mkavl_count(input->tree_h) != mkavl_count(input->tree_copy_h)) {
+        LOG_FAIL("unequal count after copy, original %u copy %u)", 
+                 mkavl_count(input->tree_h), mkavl_count(input->tree_copy_h));
+        return (false);
+    }
 
     return (true);
+}
+
+static bool
+mkavl_test_iterator (mkavl_test_input_st *input)
+{
+    mkavl_iterator_handle iter1_h = NULL, iter2_h = NULL;
+    mkavl_iterator_handle copy_iter1_h = NULL;
+    uint32_t last_idx = (input->opts->node_cnt - 1);
+    uint32_t *item, *copy_item, *cur_item, *prev_item, *found_item;
+    uint32_t idx;
+    mkavl_rc_e rc;
+    bool retval = true;
+
+    /* 
+     * Iterate over both trees, make sure order is the same, everything is less
+     * than in one iterator and greater than in the other.
+     */
+    rc = mkavl_iter_new(&iter1_h, input->tree_h, MKAVL_TEST_KEY_E_ASC);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new iterator failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_new(&iter2_h, input->tree_h, MKAVL_TEST_KEY_E_DESC);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new iterator failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_new(&copy_iter1_h, input->tree_copy_h,
+                        MKAVL_TEST_KEY_E_ASC);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("new iterator failed, rc(%s)", mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_last(iter1_h, (void **) &item);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("iterator operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    if (*item != input->sorted_seq[last_idx]) {
+        LOG_FAIL("iterator item value mismatch, item %u array val %u",
+                 *item, input->sorted_seq[last_idx]);
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_last(iter2_h, (void **) &item);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("iterator operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    if (*item != input->sorted_seq[0]) {
+        LOG_FAIL("iterator item value mismatch, item %u array val %u",
+                 *item, input->sorted_seq[0]);
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_first(iter2_h, (void **) &item);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("iterator operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    if (*item != input->sorted_seq[last_idx]) {
+        LOG_FAIL("iterator item value mismatch, item %u array val %u",
+                 *item, input->sorted_seq[last_idx]);
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_first(iter1_h, (void **) &item);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("iterator operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    if (*item != input->sorted_seq[0]) {
+        LOG_FAIL("iterator item value mismatch, item %u array val %u",
+                 *item, input->sorted_seq[0]);
+        retval = false;
+        goto cleanup;
+    }
+
+    rc = mkavl_iter_first(copy_iter1_h, (void **) &copy_item);
+    if (mkavl_rc_e_is_notok(rc)) {
+        LOG_FAIL("iterator operation failed, rc(%s)",
+                 mkavl_rc_e_get_string(rc));
+        retval = false;
+        goto cleanup;
+    }
+
+    idx = 0;
+    prev_item = NULL;
+    while ((NULL != item) && (NULL != copy_item)) {
+        if (idx >= input->opts->node_cnt) {
+            LOG_FAIL("invalid idx(%u), node_cnt(%u)", idx,
+                     input->opts->node_cnt);
+            retval = false;
+            goto cleanup;
+        }
+
+        if (*item != *copy_item) {
+            LOG_FAIL("iterator has mismatch, item %u copy_item %u", *item,
+                     *copy_item);
+            retval = false;
+            goto cleanup;
+        }
+
+        if (*item != input->sorted_seq[idx]) {
+            LOG_FAIL("iterator has mismatch, item %u sorted_seq %u", *item,
+                     input->sorted_seq[idx]);
+            retval = false;
+            goto cleanup;
+        }
+
+        /* Go to the next unique value in the sorted array */
+        while ((*item == input->sorted_seq[idx]) && 
+               (idx < input->opts->node_cnt)) {
+            ++idx;
+        }
+
+        /* Test the current function */
+        rc = mkavl_iter_cur(iter1_h, (void **) &cur_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("iterator operation failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            retval = false;
+            goto cleanup;
+        }
+
+        if (item != cur_item) {
+            LOG_FAIL("iterator has mismatch, item %p cur_item %p", item,
+                     cur_item);
+            retval = false;
+            goto cleanup;
+        }
+
+        /* Test previous */
+        rc = mkavl_iter_prev(iter1_h, (void **) &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("iterator operation failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            retval = false;
+            goto cleanup;
+        }
+
+        if (prev_item != item) {
+            LOG_FAIL("iterator has mismatch, item %p prev_item %p", item,
+                     prev_item);
+            retval = false;
+            goto cleanup;
+        }
+
+        /* Test find */
+        rc = mkavl_iter_find(iter1_h, cur_item, (void **) &found_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("iterator operation failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            retval = false;
+            goto cleanup;
+        }
+
+        if (found_item != cur_item) {
+            LOG_FAIL("iterator has mismatch, found_item %p cur_item %p", 
+                     found_item, cur_item);
+            retval = false;
+            goto cleanup;
+        }
+
+        rc = mkavl_iter_next(iter1_h, (void **) &item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("iterator operation failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            retval = false;
+            goto cleanup;
+        }
+
+        rc = mkavl_iter_next(copy_iter1_h, (void **) &copy_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("iterator operation failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            retval = false;
+            goto cleanup;
+        }
+
+        prev_item = cur_item;
+    }
+
+    if (item != copy_item) {
+        LOG_FAIL("iterator has mismatch, item %p copy_item %p", item,
+                 copy_item);
+        retval = false;
+        goto cleanup;
+    }
+
+cleanup:
+
+    if (NULL != iter1_h) {
+        mkavl_iter_delete(&iter1_h);
+    }
+
+    if (NULL != iter2_h) {
+        mkavl_iter_delete(&iter2_h);
+    }
+
+    if (NULL != copy_iter1_h) {
+        mkavl_iter_delete(&copy_iter1_h);
+    }
+
+    return (retval);
 }
 
 static bool
@@ -1032,6 +1361,10 @@ run_mkavl_test (mkavl_test_input_st *input)
 {
     mkavl_find_type_e find_type;
     bool test_rc;
+
+    mkavl_copy_cnt = 0;
+    mkavl_copy_malloc_cnt = 0;
+    mkavl_copy_free_cnt = 0;
 
     if (NULL == input) {
         LOG_FAIL("invalid input");
@@ -1110,10 +1443,11 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
-    /* 
-     * Iterate over both trees, make sure order is the same, everything is less
-     * than in one iterator and greater than in the other.
-     */
+    /* Test iterators */
+    test_rc = mkavl_test_iterator(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
     /* Do walk over trees */
 
@@ -1121,11 +1455,20 @@ run_mkavl_test (mkavl_test_input_st *input)
 
     /* Destroy other tree: make sure destroy is called as expected */
 
+    /*
+    if (mkavl_copy_malloc_cnt != mkavl_copy_free_cnt) {
+        LOG_FAIL("malloc count(%u) != free count(%u)", mkavl_copy_malloc_cnt,
+                 mkavl_copy_free_cnt);
+        return (false);
+    }
+    */
+
     return (true);
 
 err_exit:
 
     if (NULL != input->tree_h) {
+        // TODO: crash here on copied tree
         mkavl_test_delete(input, NULL, NULL);
     }
 
