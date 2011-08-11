@@ -22,6 +22,10 @@
  * Unit test for mkavl library.
  */
 
+// TODO
+// 1. Documentation
+// 2. Memory leak check?
+
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -358,6 +362,7 @@ typedef struct mkavl_test_ctx_st_ {
 } mkavl_test_ctx_st;
 
 static uint32_t mkavl_copy_cnt = 0;
+static uint32_t mkavl_item_fn_cnt = 0;
 static uint32_t mkavl_copy_malloc_cnt = 0;
 static uint32_t mkavl_copy_free_cnt = 0;
 
@@ -525,14 +530,25 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
     return (true);
 }
 
+static mkavl_rc_e
+mkavl_test_delete_context (void *context)
+{
+    if (NULL == context) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+
+    free(context);
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
 static bool
-mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn,
-                   mkavl_delete_context_fn delete_context_fn)
+mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
 {
     mkavl_rc_e rc;
 
     if (NULL != input->tree_h) {
-        rc = mkavl_delete(&(input->tree_h), item_fn, delete_context_fn);
+        rc = mkavl_delete(&(input->tree_h), item_fn, mkavl_test_delete_context);
         if (mkavl_rc_e_is_notok(rc)) {
             LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
             return (false);
@@ -540,7 +556,8 @@ mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn,
     }
 
     if (NULL != input->tree_copy_h) {
-        rc = mkavl_delete(&(input->tree_copy_h), item_fn, delete_context_fn);
+        rc = mkavl_delete(&(input->tree_copy_h), item_fn, 
+                          mkavl_test_delete_context);
         if (mkavl_rc_e_is_notok(rc)) {
             LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
             return (false);
@@ -601,7 +618,7 @@ mkavl_test_add (mkavl_test_input_st *input)
     }
 
     if (non_null_cnt != input->dup_cnt) {
-        LOG_FAIL("duplidate check failed, non_null_cnt(%u) dup_cnt(%u)", 
+        LOG_FAIL("duplicate check failed, non_null_cnt(%u) dup_cnt(%u)", 
                  non_null_cnt, input->dup_cnt);
         return (false);
     }
@@ -1080,18 +1097,6 @@ mkavl_test_copy_fn (void *item, void *context)
     return (new_item);
 }
 
-static mkavl_rc_e
-mkavl_test_delete_context (void *context)
-{
-    if (NULL == context) {
-        return (MKAVL_RC_E_EINVAL);
-    }
-
-    free(context);
-
-    return (MKAVL_RC_E_SUCCESS);
-}
-
 static bool
 mkavl_test_copy (mkavl_test_input_st *input)
 {
@@ -1426,11 +1431,63 @@ mkavl_test_walk (mkavl_test_input_st *input)
 }
 
 static bool
+mkavl_test_remove (mkavl_test_input_st *input)
+{
+    uint32_t i, null_cnt = 0;
+    mkavl_rc_e rc;
+    uint32_t *found_item;
+
+    for (i = 0; i < input->opts->node_cnt; ++i) {
+        rc = mkavl_remove(input->tree_h, &(input->delete_seq[i]), 
+                          (void **) &found_item);
+        if (mkavl_rc_e_is_notok(rc)) {
+            LOG_FAIL("remove failed, rc(%s)",
+                     mkavl_rc_e_get_string(rc));
+            return (false);
+        }
+
+        if (NULL == found_item) {
+            ++null_cnt;
+        }
+    }
+
+    if (null_cnt != input->dup_cnt) {
+        LOG_FAIL("duplicate check failed, null_cnt(%u) dup_cnt(%u)", 
+                 null_cnt, input->dup_cnt);
+        return (false);
+    }
+
+    if (0 != mkavl_count(input->tree_h)) {
+        LOG_FAIL("remove count check failed, count(%u)",
+                 mkavl_count(input->tree_h));
+        return (false);
+    }
+
+    return (true);
+}
+
+static mkavl_rc_e
+mkavl_test_item_fn (void *item, void *context)
+{
+    mkavl_test_ctx_st *ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == item) || (NULL == ctx) || 
+        (MKAVL_TEST_MAGIC != ctx->magic)) {
+        abort();
+    }
+
+    ++mkavl_item_fn_cnt;
+
+    return (MKAVL_RC_E_SUCCESS);
+}
+
+static bool
 run_mkavl_test (mkavl_test_input_st *input)
 {
     mkavl_find_type_e find_type;
     bool test_rc;
 
+    mkavl_item_fn_cnt = 0;
     mkavl_copy_cnt = 0;
     mkavl_copy_malloc_cnt = 0;
     mkavl_copy_free_cnt = 0;
@@ -1446,7 +1503,7 @@ run_mkavl_test (mkavl_test_input_st *input)
     }
 
     /* Destroy an empty tree */
-    test_rc = mkavl_test_delete(input, NULL, NULL);
+    test_rc = mkavl_test_delete(input, mkavl_test_item_fn);
     if (!test_rc) {
         goto err_exit;
     }
@@ -1524,25 +1581,42 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
-    /* Delete items from one tree */
+    /* 
+     * Remove items from the original tree, let the items remain in the copied
+     * tree so mkavl_delete handles them.
+     */
+    test_rc = mkavl_test_remove(input);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
-    /* Destroy other tree: make sure destroy is called as expected */
+    /* 
+     * Destroy both trees: make sure the delete function is called as expected
+     * for the copied tree.
+     */
+    test_rc = mkavl_test_delete(input, mkavl_test_item_fn);
+    if (!test_rc) {
+        goto err_exit;
+    }
 
-    /*
+    if (mkavl_item_fn_cnt != input->uniq_cnt) {
+        LOG_FAIL("item fn count(%u) != uniq count(%u)", mkavl_item_fn_cnt,
+                 input->uniq_cnt);
+        return (false);
+    }
+
     if (mkavl_copy_malloc_cnt != mkavl_copy_free_cnt) {
         LOG_FAIL("malloc count(%u) != free count(%u)", mkavl_copy_malloc_cnt,
                  mkavl_copy_free_cnt);
         return (false);
     }
-    */
 
     return (true);
 
 err_exit:
 
     if (NULL != input->tree_h) {
-        // TODO: crash here on copied tree
-        mkavl_test_delete(input, NULL, NULL);
+        mkavl_test_delete(input, mkavl_test_item_fn);
     }
 
     return (false);
