@@ -1074,8 +1074,6 @@ mkavl_test_remove_key_error (mkavl_test_input_st *input)
 static void *
 mkavl_test_copy_fn (void *item, void *context)
 {
-    uint32_t *orig_item = (uint32_t *) item;
-    uint32_t *new_item;
     mkavl_test_ctx_st *ctx;
 
     ctx = (mkavl_test_ctx_st *) context;
@@ -1085,16 +1083,7 @@ mkavl_test_copy_fn (void *item, void *context)
     }
     ++mkavl_copy_cnt;
 
-    if (NULL == orig_item) {
-        return (NULL);
-    }
-
-    new_item = malloc(sizeof(*new_item));
-    if (NULL != new_item) {
-        *new_item = *orig_item;
-    }
-
-    return (new_item);
+    return (item);
 }
 
 static bool
@@ -1265,8 +1254,8 @@ mkavl_test_iterator (mkavl_test_input_st *input)
         }
 
         /* Go to the next unique value in the sorted array */
-        while ((*item == input->sorted_seq[idx]) && 
-               (idx < input->opts->node_cnt)) {
+        while ((idx < input->opts->node_cnt) &&
+               (*item == input->sorted_seq[idx])) {
             ++idx;
         }
 
