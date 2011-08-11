@@ -24,6 +24,7 @@
 
 #include "mkavl.h"
 #include "libavl/avl.h"
+#include <stdio.h>
 
 /**
  * Compile time assert macro from:
@@ -344,9 +345,7 @@ mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
     mkavl_allocator_wrapper_st *mkavl_allocator =
         (mkavl_allocator_wrapper_st *) allocator;
 
-    if (!mkavl_allocator_wrapper_is_valid(mkavl_allocator)) {
-        return (NULL);
-    }
+    mkavl_assert_abort(mkavl_allocator_wrapper_is_valid(mkavl_allocator));
 
     return (mkavl_allocator->mkavl_allocator.malloc_fn(size));
 }
@@ -363,9 +362,7 @@ mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
     mkavl_allocator_wrapper_st *mkavl_allocator =
         (mkavl_allocator_wrapper_st *) allocator;
 
-    if (!mkavl_allocator_wrapper_is_valid(mkavl_allocator)) {
-        return;
-    }
+    mkavl_assert_abort(mkavl_allocator_wrapper_is_valid(mkavl_allocator));
 
     return (mkavl_allocator->mkavl_allocator.free_fn(libavl_block));
 }
@@ -452,19 +449,21 @@ mkavl_delete_tree (mkavl_tree_handle *tree_h)
         return (MKAVL_RC_E_SUCCESS);
     }
 
-    local_tree_h->allocator.magic = MKAVL_CTX_STALE;
     if (NULL != local_tree_h->avl_tree_array) {
         for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
             if (NULL != local_tree_h->avl_tree_array[i].tree) { 
                 if (NULL != local_tree_h->avl_tree_array[i].avl_ctx) {
                     local_allocator.free_fn(
                         local_tree_h->avl_tree_array[i].avl_ctx);
+                    local_tree_h->avl_tree_array[i].avl_ctx = NULL;
                 }
                 avl_destroy(local_tree_h->avl_tree_array[i].tree, NULL);
+                local_tree_h->avl_tree_array[i].tree = NULL;
             }
         }
         local_allocator.free_fn(local_tree_h->avl_tree_array);
     }
+    local_tree_h->allocator.magic = MKAVL_CTX_STALE;
 
     local_allocator.free_fn(local_tree_h);
 
@@ -733,7 +732,6 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn,
                         local_tree_h->avl_tree_array[first_tree_idx].tree);
         while (NULL != item_to_delete) {
             mkavl_assert_abort(runaway_counter <= MKAVL_RUNAWAY_SANITY);
-
             for (i = first_tree_idx; i < local_tree_h->avl_tree_count; ++i) {
                 if (NULL != local_tree_h->avl_tree_array[i].tree) {
                     item = avl_delete(local_tree_h->avl_tree_array[i].tree,
@@ -815,6 +813,7 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
     void *context_to_use;
     mkavl_delete_context_fn delete_context_fn_to_use;
     uint32_t i;
+    bool is_first_item;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
 
     if (NULL == new_tree_h) {
@@ -864,6 +863,12 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
         if (NULL != copy_fn) {
             copy_fn_to_use = mkavl_copy_wrapper;
         }
+        /*
+         * avl_copy() is going to allocate the tree, but mkavl_new() already did
+         * this, so we free the mkavl_new one here to prevent a leak.
+         */
+        local_tree_h->allocator.mkavl_allocator.free_fn(
+            local_tree_h->avl_tree_array[0].tree);
         local_tree_h->avl_tree_array[0].tree = 
             avl_copy(source_tree_h->avl_tree_array[0].tree, copy_fn_to_use,
                      NULL, &(local_tree_h->allocator.avl_allocator));
@@ -874,11 +879,26 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
 
         local_tree_h->item_count = 
             avl_count(local_tree_h->avl_tree_array[0].tree);
+        /* 
+         * avl_copy() sets the AVL context to that of the source, so we need to
+         * fix it up here explicitly.
+         */
+        local_tree_h->avl_tree_array[0].tree->avl_param =
+            local_tree_h->avl_tree_array[0].avl_ctx;
 
         if (local_tree_h->avl_tree_count > 1) {
             item = avl_t_first(&avl_t, local_tree_h->avl_tree_array[0].tree);
+            is_first_item = true;
             while (NULL != item) {
                 for (i = 1; i < local_tree_h->avl_tree_count; ++i) {
+                    if (is_first_item) {
+                        /* 
+                         * avl_copy() sets the AVL context to that of the
+                         * source, so we need to fix it up here explicitly.
+                         */
+                        local_tree_h->avl_tree_array[i].tree->avl_param =
+                            local_tree_h->avl_tree_array[i].avl_ctx;
+                    }
                     rc = mkavl_add_key_idx(local_tree_h, i,
                                            item, &existing_item);
                     if (mkavl_rc_e_is_notok(rc)) {
@@ -886,6 +906,7 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
                     }
                 }
                 item = avl_t_next(&avl_t);
+                is_first_item = false;
             }
         }
     }
