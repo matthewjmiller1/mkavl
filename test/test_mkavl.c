@@ -216,6 +216,7 @@ parse_command_line (int argc, char **argv, test_mkavl_opts_st *opts)
             if ((end_ptr != optarg) && (0 == errno)) {
                 opts->range_start = val;
             }
+            break;
         case 'e':
             val = strtol(optarg, &end_ptr, 10);
             if ((end_ptr != optarg) && (0 == errno)) {
