@@ -24,7 +24,6 @@
 
 // TODO
 // 1. Documentation
-// 2. Memory leak check?
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -359,24 +358,38 @@ main (int argc, char *argv[])
 
 typedef struct mkavl_test_ctx_st_ {
     uint32_t magic;
+    uint32_t copy_cnt;
+    uint32_t item_fn_cnt;
+    uint32_t copy_malloc_cnt;
+    uint32_t copy_free_cnt;
+    bool delete_ctx;
 } mkavl_test_ctx_st;
 
-static uint32_t mkavl_copy_cnt = 0;
-static uint32_t mkavl_item_fn_cnt = 0;
-static uint32_t mkavl_copy_malloc_cnt = 0;
-static uint32_t mkavl_copy_free_cnt = 0;
-
 static void *
-mkavl_test_copy_malloc (size_t size)
+mkavl_test_copy_malloc (size_t size, void *context)
 {
-    ++mkavl_copy_malloc_cnt;
+    mkavl_test_ctx_st *ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
+        abort();
+    }
+
+    ++(ctx->copy_malloc_cnt);
+
     return (malloc(size));
 }
 
 static void
-mkavl_test_copy_free (void *ptr)
+mkavl_test_copy_free (void *ptr, void *context)
 {
-    ++mkavl_copy_free_cnt;
+    mkavl_test_ctx_st *ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
+        abort();
+    }
+
+    ++(ctx->copy_free_cnt);
+
     free(ptr);
 }
 
@@ -519,6 +532,7 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
         return (false);
     }
     ctx->magic = MKAVL_TEST_MAGIC;
+    ctx->delete_ctx = true;
 
     rc = mkavl_new(&(input->tree_h), cmp_fn_array, NELEMS(cmp_fn_array),
                    ctx, allocator);
@@ -533,11 +547,15 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
 static mkavl_rc_e
 mkavl_test_delete_context (void *context)
 {
-    if (NULL == context) {
+    mkavl_test_ctx_st *ctx = (mkavl_test_ctx_st *) context;
+
+    if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
         return (MKAVL_RC_E_EINVAL);
     }
 
-    free(context);
+    if (ctx->delete_ctx) {
+        free(context);
+    }
 
     return (MKAVL_RC_E_SUCCESS);
 }
@@ -1081,7 +1099,7 @@ mkavl_test_copy_fn (void *item, void *context)
     if ((NULL == ctx) || (MKAVL_TEST_MAGIC != ctx->magic)) {
         abort();
     }
-    ++mkavl_copy_cnt;
+    ++(ctx->copy_cnt);
 
     return (item);
 }
@@ -1090,7 +1108,13 @@ static bool
 mkavl_test_copy (mkavl_test_input_st *input)
 {
     mkavl_rc_e rc;
-    mkavl_test_ctx_st *ctx;
+    mkavl_test_ctx_st *ctx, *src_ctx;
+
+    src_ctx = mkavl_get_tree_context(input->tree_h);
+    if (NULL == src_ctx) {
+        LOG_FAIL("NULL context pointer");
+        return (false);
+    }
 
     ctx = calloc(1, sizeof(*ctx));
     if (NULL == ctx) {
@@ -1098,6 +1122,7 @@ mkavl_test_copy (mkavl_test_input_st *input)
         return (false);
     }
     ctx->magic = MKAVL_TEST_MAGIC;
+    ctx->delete_ctx = false;
 
     rc = mkavl_copy(input->tree_h,
                     &(input->tree_copy_h),
@@ -1109,9 +1134,9 @@ mkavl_test_copy (mkavl_test_input_st *input)
         return (false);
     }
 
-    if (mkavl_copy_cnt != input->uniq_cnt) {
+    if (src_ctx->copy_cnt != input->uniq_cnt) {
         LOG_FAIL("unexpected copy count, copy count %u "
-                 "unique count %u)", mkavl_copy_cnt, input->uniq_cnt);
+                 "unique count %u)", ctx->copy_cnt, input->uniq_cnt);
         return (false);
     }
 
@@ -1465,7 +1490,7 @@ mkavl_test_item_fn (void *item, void *context)
         abort();
     }
 
-    ++mkavl_item_fn_cnt;
+    ++(ctx->item_fn_cnt);
 
     return (MKAVL_RC_E_SUCCESS);
 }
@@ -1474,12 +1499,8 @@ static bool
 run_mkavl_test (mkavl_test_input_st *input)
 {
     mkavl_find_type_e find_type;
+    mkavl_test_ctx_st *ctx;
     bool test_rc;
-
-    mkavl_item_fn_cnt = 0;
-    mkavl_copy_cnt = 0;
-    mkavl_copy_malloc_cnt = 0;
-    mkavl_copy_free_cnt = 0;
 
     if (NULL == input) {
         LOG_FAIL("invalid input");
@@ -1579,6 +1600,12 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
+    ctx = mkavl_get_tree_context(input->tree_copy_h);
+    if (NULL == ctx) {
+        LOG_FAIL("NULL context");
+        goto err_exit;
+    }
+
     /* 
      * Destroy both trees: make sure the delete function is called as expected
      * for the copied tree.
@@ -1588,24 +1615,34 @@ run_mkavl_test (mkavl_test_input_st *input)
         goto err_exit;
     }
 
-    if (mkavl_item_fn_cnt != input->uniq_cnt) {
-        LOG_FAIL("item fn count(%u) != uniq count(%u)", mkavl_item_fn_cnt,
+    if (ctx->item_fn_cnt != input->uniq_cnt) {
+        LOG_FAIL("item fn count(%u) != uniq count(%u)", ctx->item_fn_cnt,
                  input->uniq_cnt);
-        return (false);
+        goto err_exit;
     }
 
-    if (mkavl_copy_malloc_cnt != mkavl_copy_free_cnt) {
-        LOG_FAIL("malloc count(%u) != free count(%u)", mkavl_copy_malloc_cnt,
-                 mkavl_copy_free_cnt);
-        return (false);
+    if (ctx->copy_malloc_cnt != ctx->copy_free_cnt) {
+        LOG_FAIL("malloc count(%u) != free count(%u)", 
+                 ctx->copy_malloc_cnt, ctx->copy_free_cnt);
+        goto err_exit;
     }
+
+    free(ctx);
+    ctx = NULL;
 
     return (true);
 
 err_exit:
 
-    if (NULL != input->tree_h) {
-        mkavl_test_delete(input, mkavl_test_item_fn);
+    ctx = NULL;
+    if (NULL != input->tree_copy_h) {
+        ctx = mkavl_get_tree_context(input->tree_copy_h);
+    }
+
+    mkavl_test_delete(input, mkavl_test_item_fn);
+
+    if (NULL != ctx) {
+        free(ctx);
     }
 
     return (false);

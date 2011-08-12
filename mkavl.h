@@ -150,13 +150,13 @@ typedef enum mkavl_find_type_e_ {
  * Prototype for allocating items.
  */
 typedef void *
-(*mkavl_malloc_fn)(size_t size);
+(*mkavl_malloc_fn)(size_t size, void *context);
 
 /**
  * Prototype for freeing items.
  */
 typedef void
-(*mkavl_free_fn)(void *ptr);
+(*mkavl_free_fn)(void *ptr, void *context);
 
 /**
  * Specifies the allocator functions for an AVL tree.
@@ -253,6 +253,9 @@ mkavl_new(mkavl_tree_handle *tree_h,
           mkavl_compare_fn *compare_fn_array, 
           size_t compare_fn_array_count, 
           void *context, mkavl_allocator_st *allocator);
+
+extern void *
+mkavl_get_tree_context(mkavl_tree_handle tree_h);
 
 extern mkavl_rc_e
 mkavl_delete(mkavl_tree_handle *tree_h, mkavl_item_fn item_fn, 

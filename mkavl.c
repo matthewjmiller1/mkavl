@@ -92,6 +92,8 @@ typedef struct mkavl_allocator_wrapper_st_ {
     uint32_t magic;
     /** The mkavl allocator */
     mkavl_allocator_st mkavl_allocator;
+    /** The tree using the allocator */
+    mkavl_tree_handle tree_h;
 } mkavl_allocator_wrapper_st;
 
 /**
@@ -329,6 +331,10 @@ mkavl_allocator_wrapper_is_valid (mkavl_allocator_wrapper_st *allocator)
         is_valid = false;
     }
 
+    if (is_valid && (NULL == allocator->tree_h)) {
+        is_valid = false;
+    }
+
     return (is_valid);
 }
 
@@ -347,7 +353,8 @@ mkavl_malloc_wrapper (struct libavl_allocator *allocator, size_t size)
 
     mkavl_assert_abort(mkavl_allocator_wrapper_is_valid(mkavl_allocator));
 
-    return (mkavl_allocator->mkavl_allocator.malloc_fn(size));
+    return (mkavl_allocator->mkavl_allocator.malloc_fn(size,
+                mkavl_allocator->tree_h->context));
 }
 
 /**
@@ -364,13 +371,26 @@ mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
 
     mkavl_assert_abort(mkavl_allocator_wrapper_is_valid(mkavl_allocator));
 
-    return (mkavl_allocator->mkavl_allocator.free_fn(libavl_block));
+    return (mkavl_allocator->mkavl_allocator.free_fn(libavl_block,
+                mkavl_allocator->tree_h->context));
+}
+
+static void *
+mkavl_default_malloc_fn (size_t size, void *context)
+{
+    return (malloc(size));
+}
+
+static void
+mkavl_default_free_fn (void *ptr, void *context)
+{
+    return (free(ptr));
 }
 
 /* By default, we'll just use malloc and free if the client passes nothing in */
 static mkavl_allocator_st mkavl_allocator_default = {
-    malloc,
-    free
+    mkavl_default_malloc_fn,
+    mkavl_default_free_fn
 };
 
 static struct libavl_allocator mkavl_allocator_wrapper = {
@@ -435,6 +455,7 @@ mkavl_delete_tree (mkavl_tree_handle *tree_h)
 {
     mkavl_allocator_st local_allocator;
     mkavl_tree_handle local_tree_h;
+    void *context;
     uint32_t i;
 
     if (NULL == tree_h) {
@@ -444,6 +465,7 @@ mkavl_delete_tree (mkavl_tree_handle *tree_h)
 
     memcpy(&local_allocator, &(local_tree_h->allocator.mkavl_allocator),
            sizeof(local_allocator));
+    context = local_tree_h->context;
 
     if (NULL == local_tree_h) {
         return (MKAVL_RC_E_SUCCESS);
@@ -454,18 +476,19 @@ mkavl_delete_tree (mkavl_tree_handle *tree_h)
             if (NULL != local_tree_h->avl_tree_array[i].tree) { 
                 if (NULL != local_tree_h->avl_tree_array[i].avl_ctx) {
                     local_allocator.free_fn(
-                        local_tree_h->avl_tree_array[i].avl_ctx);
+                        local_tree_h->avl_tree_array[i].avl_ctx, context);
                     local_tree_h->avl_tree_array[i].avl_ctx = NULL;
                 }
                 avl_destroy(local_tree_h->avl_tree_array[i].tree, NULL);
                 local_tree_h->avl_tree_array[i].tree = NULL;
             }
         }
-        local_allocator.free_fn(local_tree_h->avl_tree_array);
+        local_allocator.free_fn(local_tree_h->avl_tree_array, context);
     }
+    local_tree_h->allocator.tree_h = NULL;
     local_tree_h->allocator.magic = MKAVL_CTX_STALE;
 
-    local_allocator.free_fn(local_tree_h);
+    local_allocator.free_fn(local_tree_h, context);
 
     *tree_h = NULL;
 
@@ -534,7 +557,7 @@ mkavl_iterator_is_valid (mkavl_iterator_handle iterator_h)
         is_valid = false;
     }
 
-    if (is_valid && (!mkavl_tree_is_valid(iterator_h->tree_h))) {
+    if (is_valid && !mkavl_tree_is_valid(iterator_h->tree_h)) {
         is_valid = false;
     }
 
@@ -584,7 +607,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
     local_allocator = 
         (NULL == allocator) ? &mkavl_allocator_default : allocator;
 
-    local_tree_h = local_allocator->malloc_fn(sizeof(*local_tree_h));
+    local_tree_h = local_allocator->malloc_fn(sizeof(*local_tree_h), context);
     if (NULL == local_tree_h) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
@@ -595,6 +618,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
            sizeof(local_tree_h->allocator.avl_allocator));
     memcpy(&(local_tree_h->allocator.mkavl_allocator), local_allocator,
            sizeof(local_tree_h->allocator));
+    local_tree_h->allocator.tree_h = local_tree_h;
     local_tree_h->allocator.magic = MKAVL_CTX_MAGIC;
     local_tree_h->avl_tree_count = compare_fn_array_count;
     local_tree_h->avl_tree_array = NULL;
@@ -603,7 +627,8 @@ mkavl_new (mkavl_tree_handle *tree_h,
 
     local_tree_h->avl_tree_array = 
         local_allocator->malloc_fn(local_tree_h->avl_tree_count * 
-                                   sizeof(*(local_tree_h->avl_tree_array)));
+                                   sizeof(*(local_tree_h->avl_tree_array)),
+                                   context);
     if (NULL == local_tree_h->avl_tree_array) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
@@ -620,7 +645,7 @@ mkavl_new (mkavl_tree_handle *tree_h,
     }
 
     for (i = 0; i < local_tree_h->avl_tree_count; ++i) {
-        avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx));
+        avl_ctx = local_allocator->malloc_fn(sizeof(*avl_ctx), context);
         if (NULL == avl_ctx) {
             rc = MKAVL_RC_E_ENOMEM;
             goto err_exit;
@@ -660,10 +685,26 @@ err_exit:
 
     if (NULL != avl_ctx) {
         /* Ownership of this memory hasn't been transferred to a tree yet */
-        local_allocator->free_fn(avl_ctx);
+        local_allocator->free_fn(avl_ctx, context);
     }
 
     return (rc);
+}
+
+/**
+ * Get the context pointer for the tree.
+ *
+ * @see mkavl_new
+ * @param tree_h The tree whose context to get.  This must be a valid, non-NULL
+ * tree pointer or else a crash will occur.
+ * @return The tree's context (possibly NULL if that was passed to mkavl_new()).
+ */
+void *
+mkavl_get_tree_context (mkavl_tree_handle tree_h)
+{
+    mkavl_assert_abort(mkavl_tree_is_valid(tree_h));
+
+    return (tree_h->context);
 }
 
 /**
@@ -696,6 +737,7 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn,
     uint32_t i, first_tree_idx;
     uint32_t runaway_counter = 0;
     struct avl_traverser avl_t = {0};
+    void *context;
     mkavl_rc_e rc = MKAVL_RC_E_SUCCESS;
     mkavl_rc_e retval = MKAVL_RC_E_SUCCESS;
 
@@ -757,15 +799,17 @@ mkavl_delete (mkavl_tree_handle *tree_h, mkavl_item_fn item_fn,
         }
     }
 
+    context = local_tree_h->context;
+
+    rc = mkavl_delete_tree(tree_h);
+    mkavl_assert_abort(mkavl_rc_e_is_ok(rc));
+
     if (NULL != delete_context_fn) {
-        rc = delete_context_fn(local_tree_h->context);
+        rc = delete_context_fn(context);
         if (mkavl_rc_e_is_notok(rc)) {
             retval = rc;
         }
     }
-
-    rc = mkavl_delete_tree(tree_h);
-    mkavl_assert_abort(mkavl_rc_e_is_ok(rc));
 
     return (retval);
 }
@@ -868,7 +912,7 @@ mkavl_copy (mkavl_tree_handle source_tree_h,
          * this, so we free the mkavl_new one here to prevent a leak.
          */
         local_tree_h->allocator.mkavl_allocator.free_fn(
-            local_tree_h->avl_tree_array[0].tree);
+            local_tree_h->avl_tree_array[0].tree, local_tree_h->context);
         local_tree_h->avl_tree_array[0].tree = 
             avl_copy(source_tree_h->avl_tree_array[0].tree, copy_fn_to_use,
                      NULL, &(local_tree_h->allocator.avl_allocator));
@@ -1516,7 +1560,8 @@ mkavl_iter_new (mkavl_iterator_handle *iterator_h, mkavl_tree_handle tree_h,
     *iterator_h = NULL;
 
     local_iter_h =
-        tree_h->allocator.mkavl_allocator.malloc_fn(sizeof(*local_iter_h));
+        tree_h->allocator.mkavl_allocator.malloc_fn(sizeof(*local_iter_h),
+                                                    tree_h->context);
     if (NULL == local_iter_h) {
         rc = MKAVL_RC_E_ENOMEM;
         goto err_exit;
@@ -1534,7 +1579,8 @@ mkavl_iter_new (mkavl_iterator_handle *iterator_h, mkavl_tree_handle tree_h,
 err_exit:
 
     if (NULL != local_iter_h) {
-        tree_h->allocator.mkavl_allocator.free_fn(local_iter_h);
+        tree_h->allocator.mkavl_allocator.free_fn(local_iter_h, 
+                                                  tree_h->context);
         local_iter_h = NULL;
     }
 
@@ -1565,7 +1611,7 @@ mkavl_iter_delete (mkavl_iterator_handle *iterator_h)
     }
 
     free_fn = local_iter_h->tree_h->allocator.mkavl_allocator.free_fn;
-    free_fn(local_iter_h);
+    free_fn(local_iter_h, local_iter_h->tree_h->context);
 
     *iterator_h = NULL;
 
