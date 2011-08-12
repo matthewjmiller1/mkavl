@@ -22,9 +22,6 @@
  * Unit test for mkavl library.
  */
 
-// TODO
-// 1. Documentation
-
 #include <stdlib.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -33,6 +30,9 @@
 #include <stdio.h>
 #include "../mkavl.h"
 
+/**
+ * Display a failure message.
+ */
 #define LOG_FAIL(fmt, args...) \
 do { \
     printf("FAILURE(%s:%u): " fmt "\n", __FUNCTION__, __LINE__, ##args); \
@@ -45,27 +45,54 @@ do { \
 #define NELEMS(x) (sizeof(x) / sizeof(x[0]))
 #endif
 
+/**
+ * Compile time assert macro from:
+ * http://www.pixelbeat.org/programming/gcc/static_assert.html 
+ */
 #ifndef CT_ASSERT
 #define CT_ASSERT(e) extern char (*CT_ASSERT(void)) [sizeof(char[1 - 2*!(e)])]
 #endif
 
+/**
+ * Sanity check for infinite loops.
+ */
 #define MKAVL_TEST_RUNAWAY_SANITY 100000
 
+/** The default node count for runs */
 static const uint32_t default_node_cnt = 15;
+/** The default number of test runs */
 static const uint32_t default_run_cnt = 15;
+/** The default verbosity level of messages displayed */
 static const uint8_t default_verbosity = 0;
+/** The default start of the range for node data values */
 static const uint32_t default_range_start = 0;
+/** The default end of the range for node data values */
 static const uint32_t default_range_end = 100;
 
+/**
+ * State for the current test execution.
+ */
 typedef struct test_mkavl_opts_st_ {
+    /** The max number of nodes for the AVL tree */
     uint32_t node_cnt;
+    /** The number of separate runs to do */
     uint32_t run_cnt;
+    /** The RNG seed for the first run */
     uint32_t seed;
+    /** The verbosity level for the test */
     uint8_t verbosity;
+    /** The starting value for the data range */
     uint32_t range_start;
+    /** The ending value for the data range */
     uint32_t range_end;
 } test_mkavl_opts_st;
 
+/**
+ * Display the program's help screen and exit as needed.
+ *
+ * @param do_exit Whether to exit after the output.
+ * @param exit_val If exiting the value with which to exit.
+ */
 static void
 print_usage (bool do_exit, int32_t exit_val)
 {
@@ -95,6 +122,11 @@ print_usage (bool do_exit, int32_t exit_val)
     }
 }
 
+/**
+ * Utility function to output the value of the options.
+ *
+ * @param opts The options to output.
+ */
 static void
 print_opts (test_mkavl_opts_st *opts)
 {
@@ -108,6 +140,13 @@ print_opts (test_mkavl_opts_st *opts)
            opts->range_end, opts->verbosity);
 }
 
+/**
+ * Store the command line options into a local structure.
+ *
+ * @param argc The number of options
+ * @param argv The string for the options.
+ * @param opts The local structure in which to store the parsed info.
+ */
 static void
 parse_command_line (int argc, char **argv, test_mkavl_opts_st *opts)
 {
@@ -192,6 +231,13 @@ parse_command_line (int argc, char **argv, test_mkavl_opts_st *opts)
     }
 }
 
+/**
+ * Create a permutation of the given array.
+ *
+ * @param src_array The array to permute.
+ * @param dst_array The output location of the permuted array.
+ * @param num_elem The number of array elements in the arrays.
+ */
 static void
 permute_array (const uint32_t *src_array, uint32_t *dst_array, 
                size_t num_elem)
@@ -210,9 +256,15 @@ permute_array (const uint32_t *src_array, uint32_t *dst_array,
         dst_array[j] = dst_array[i];
         dst_array[i] = swp_val;
     }
-
 }
 
+/**
+ * Callback to compare two pointers to uint32_t's.
+ *
+ * @param a An item to compare.
+ * @param b The other item to compare.
+ * @return 0 if equal, -1 if a < b, and 1 if a > b
+ */
 static int
 uint32_t_cmp (const void *a, const void *b)
 {
@@ -228,8 +280,13 @@ uint32_t_cmp (const void *a, const void *b)
     return (0);
 }
 
-/*
- * Assumes array is sorted.
+/**
+ * Get a count of the number of unique items in the array.  This assumes the
+ * input array is sorted.
+ *
+ * @param array The sorted array.
+ * @param num_elem The number of elements in the array.
+ * @return The unique number of elements in the array.
  */
 static uint32_t
 get_unique_count (uint32_t *array, size_t num_elem)
@@ -252,14 +309,25 @@ get_unique_count (uint32_t *array, size_t num_elem)
     return (count);
 }
 
+/**
+ * The input structure to pass test parameters to functions.
+ */
 typedef struct mkavl_test_input_st_ {
+    /** The sequence in which items should be inserted */
     uint32_t *insert_seq;
+    /** The sequence in which items should be deleted */
     uint32_t *delete_seq;
+    /** The sequence in a sorted order */
     uint32_t *sorted_seq;
+    /** The count of how many unique items are in the sequence. */
     uint32_t uniq_cnt; 
+    /** The count of how many duplicated items are in the sequence. */
     uint32_t dup_cnt; 
+    /** The input options for the run */
     const test_mkavl_opts_st *opts;
+    /** The tree for the run */
     mkavl_tree_handle tree_h;
+    /** A deep copy of the tree (is such a copy has been done) */
     mkavl_tree_handle tree_copy_h;
 } mkavl_test_input_st;
 
@@ -354,17 +422,32 @@ main (int argc, char *argv[])
 
 /* AVL operation functions */
 
+/** Magic value for sanity checks */
 #define MKAVL_TEST_MAGIC 0x1234ABCD
 
+/**
+ * The context storted for a tree.
+ */
 typedef struct mkavl_test_ctx_st_ {
+    /** A sanity check field */
     uint32_t magic;
+    /** A count for how many times mkavl_test_copy_fn() was called */
     uint32_t copy_cnt;
+    /** A count for how many times mkavl_test_item_fn() was called */
     uint32_t item_fn_cnt;
+    /** A count for how many time mkavl_test_copy_malloc() was called */ 
     uint32_t copy_malloc_cnt;
+    /** A count for how many time mkavl_test_copy_free() was called */ 
     uint32_t copy_free_cnt;
-    bool delete_ctx;
 } mkavl_test_ctx_st;
 
+/**
+ * The malloc function for the copied tree.
+ *
+ * @param size Size of memory to allocate.
+ * @param context The tree context.
+ * @return A pointer to the memory or NULL if allocation was not possible.
+ */
 static void *
 mkavl_test_copy_malloc (size_t size, void *context)
 {
@@ -379,6 +462,13 @@ mkavl_test_copy_malloc (size_t size, void *context)
     return (malloc(size));
 }
 
+
+/**
+ * The free function for the copied tree.
+ *
+ * @param ptr The memory to free.
+ * @param context The tree context.
+ */
 static void
 mkavl_test_copy_free (void *ptr, void *context)
 {
@@ -393,7 +483,7 @@ mkavl_test_copy_free (void *ptr, void *context)
     free(ptr);
 }
 
-mkavl_allocator_st copy_allocator = {
+static mkavl_allocator_st copy_allocator = {
     mkavl_test_copy_malloc,
     mkavl_test_copy_free
 };
@@ -458,22 +548,35 @@ mkavl_cmp_fn2 (const void *item1, const void *item2, void *context)
     return (0);
 }
 
+/**
+ * The values for the key ordering.
+ */
 typedef enum mkavl_test_key_e_ {
+    /** Ascending order */
     MKAVL_TEST_KEY_E_ASC,
+    /** Descending order */
     MKAVL_TEST_KEY_E_DESC,
+    /** Max value for boundary testing */
     MKAVL_TEST_KEY_E_MAX,
 } mkavl_test_key_e;
 
+/** The opposite key, used for certain find operations */
 static const mkavl_test_key_e mkavl_key_opposite[] = {
     MKAVL_TEST_KEY_E_DESC,
     MKAVL_TEST_KEY_E_ASC,
 };
 
-mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
+/** The comparison functions to use */
+static mkavl_compare_fn cmp_fn_array[] = { mkavl_cmp_fn1 , mkavl_cmp_fn2 };
 
+/** @cond doxygen_suppress */
 CT_ASSERT(NELEMS(mkavl_key_opposite) == MKAVL_TEST_KEY_E_MAX);
 CT_ASSERT(NELEMS(cmp_fn_array) == MKAVL_TEST_KEY_E_MAX);
+/** @endcond */
 
+/**
+ * The type to use for find lookups for the key types.
+ */
 static const mkavl_find_type_e 
 mkavl_key_find_type[MKAVL_TEST_KEY_E_MAX][(MKAVL_FIND_TYPE_E_MAX + 1)] = {
     { MKAVL_FIND_TYPE_E_INVALID, MKAVL_FIND_TYPE_E_EQUAL,
@@ -486,6 +589,10 @@ mkavl_key_find_type[MKAVL_TEST_KEY_E_MAX][(MKAVL_FIND_TYPE_E_MAX + 1)] = {
       MKAVL_FIND_TYPE_E_MAX }
 };
 
+/**
+ * Test mkavl_new() for error handling.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_new_error (void)
 {
@@ -520,6 +627,13 @@ mkavl_test_new_error (void)
     return (true);
 }
 
+/**
+ * Test mkavl_new().
+ *
+ * @param input The input state for the test.
+ * @param allocator The allocator to use.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
 {
@@ -532,7 +646,6 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
         return (false);
     }
     ctx->magic = MKAVL_TEST_MAGIC;
-    ctx->delete_ctx = true;
 
     rc = mkavl_new(&(input->tree_h), cmp_fn_array, NELEMS(cmp_fn_array),
                    ctx, allocator);
@@ -544,6 +657,12 @@ mkavl_test_new (mkavl_test_input_st *input, mkavl_allocator_st *allocator)
     return (true);
 }
 
+/**
+ * The callback for freeing the context memory.
+ *
+ * @param context The context to free.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_test_delete_context (void *context)
 {
@@ -553,20 +672,31 @@ mkavl_test_delete_context (void *context)
         return (MKAVL_RC_E_EINVAL);
     }
 
-    if (ctx->delete_ctx) {
-        free(context);
-    }
+    ctx->magic = 0;
+    free(context);
 
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Test mkavl_delete().
+ *
+ * @param input The input state for the test.
+ * @param item_fn The function to apply to deleted items.
+ * @param delete_context_fn The function to apply to the tree's context.
+ * @param delete_copy_context_fn The function to apply to the copied tree's
+ * context.
+ * @return True if test passed.
+ */
 static bool
-mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
+mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn,
+                   mkavl_delete_context_fn delete_context_fn,
+                   mkavl_delete_context_fn delete_copy_context_fn)
 {
     mkavl_rc_e rc;
 
     if (NULL != input->tree_h) {
-        rc = mkavl_delete(&(input->tree_h), item_fn, mkavl_test_delete_context);
+        rc = mkavl_delete(&(input->tree_h), item_fn, delete_context_fn);
         if (mkavl_rc_e_is_notok(rc)) {
             LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
             return (false);
@@ -575,7 +705,7 @@ mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
 
     if (NULL != input->tree_copy_h) {
         rc = mkavl_delete(&(input->tree_copy_h), item_fn, 
-                          mkavl_test_delete_context);
+                          delete_copy_context_fn);
         if (mkavl_rc_e_is_notok(rc)) {
             LOG_FAIL("delete failed, rc(%s)", mkavl_rc_e_get_string(rc));
             return (false);
@@ -585,6 +715,12 @@ mkavl_test_delete (mkavl_test_input_st *input, mkavl_item_fn item_fn)
     return (true);
 }
 
+/**
+ * Test mkavl_add() for error handling.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_add_error (mkavl_test_input_st *input)
 {
@@ -614,6 +750,12 @@ mkavl_test_add_error (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_add().
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_add (mkavl_test_input_st *input)
 {
@@ -650,6 +792,14 @@ mkavl_test_add (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_find().
+ *
+ * @param input The input state for the test.
+ * @param val The value on which to search.
+ * @param type The type of find.
+ * @return True if test passed.
+ */
 static uint32_t *
 mkavl_test_find_val (mkavl_test_input_st *input,
                      uint32_t val, mkavl_find_type_e type)
@@ -749,6 +899,13 @@ mkavl_test_find_val (mkavl_test_input_st *input,
     return (NULL);
 }
 
+/**
+ * Test mkavl_find().
+ *
+ * @param input The input state for the test.
+ * @param type The type of find.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_find (mkavl_test_input_st *input, mkavl_find_type_e type)
 {
@@ -863,6 +1020,12 @@ mkavl_test_find (mkavl_test_input_st *input, mkavl_find_type_e type)
     return (true);
 }
 
+/**
+ * Test mkavl_find() for error handling.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_find_error (mkavl_test_input_st *input)
 {
@@ -909,6 +1072,12 @@ mkavl_test_find_error (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_remove_key() and mkavl_add_key().
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_add_remove_key (mkavl_test_input_st *input)
 {
@@ -1007,6 +1176,12 @@ mkavl_test_add_remove_key (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_add_key() for error handling.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_add_key_error (mkavl_test_input_st *input)
 {
@@ -1048,6 +1223,12 @@ mkavl_test_add_key_error (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_remove_key() for error handling.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_remove_key_error (mkavl_test_input_st *input)
 {
@@ -1089,6 +1270,13 @@ mkavl_test_remove_key_error (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * The callback for mkavl_copy().
+ *
+ * @param item The original item being copied.
+ * @param context The context for the tree.
+ * @return The item to place in the copied tree.
+ */
 static void *
 mkavl_test_copy_fn (void *item, void *context)
 {
@@ -1104,6 +1292,12 @@ mkavl_test_copy_fn (void *item, void *context)
     return (item);
 }
 
+/**
+ * Test mkavl_copy().
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_copy (mkavl_test_input_st *input)
 {
@@ -1122,7 +1316,6 @@ mkavl_test_copy (mkavl_test_input_st *input)
         return (false);
     }
     ctx->magic = MKAVL_TEST_MAGIC;
-    ctx->delete_ctx = false;
 
     rc = mkavl_copy(input->tree_h,
                     &(input->tree_copy_h),
@@ -1149,6 +1342,12 @@ mkavl_test_copy (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl iterators.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_iterator (mkavl_test_input_st *input)
 {
@@ -1375,12 +1574,25 @@ cleanup:
     return (retval);
 }
 
+/** The context for mkavl_walk() */
 typedef struct mkavl_test_walk_ctx_st_ {
+    /** Magic value for sanity check */
     uint32_t magic;
+    /** A count of the number of nodes walked */
     uint32_t walk_node_cnt;
+    /** Tells when the walk should be stopped */
     uint32_t walk_stop_cnt;
 } mkavl_test_walk_ctx_st;
 
+/**
+ * The callback for mkavl_walk().
+ *
+ * @param item The current item in the walk.
+ * @param tree_context The tree's context.
+ * @param walk_context The walks' context.
+ * @param stop_walk Can be set true to stop the walk upon return.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_test_walk_cb (void *item, void *tree_context, void *walk_context,
                     bool *stop_walk)
@@ -1403,6 +1615,12 @@ mkavl_test_walk_cb (void *item, void *tree_context, void *walk_context,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Test mkavl_walk().
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_walk (mkavl_test_input_st *input)
 {
@@ -1444,6 +1662,12 @@ mkavl_test_walk (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * Test mkavl_remove().
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 mkavl_test_remove (mkavl_test_input_st *input)
 {
@@ -1480,6 +1704,13 @@ mkavl_test_remove (mkavl_test_input_st *input)
     return (true);
 }
 
+/**
+ * The callback for per-item functions.
+ *
+ * @param item The current item.
+ * @param context The tree's context.
+ * @return The return code
+ */
 static mkavl_rc_e
 mkavl_test_item_fn (void *item, void *context)
 {
@@ -1495,6 +1726,12 @@ mkavl_test_item_fn (void *item, void *context)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Runs all of the tests.
+ *
+ * @param input The input state for the test.
+ * @return True if test passed.
+ */
 static bool
 run_mkavl_test (mkavl_test_input_st *input)
 {
@@ -1513,7 +1750,9 @@ run_mkavl_test (mkavl_test_input_st *input)
     }
 
     /* Destroy an empty tree */
-    test_rc = mkavl_test_delete(input, mkavl_test_item_fn);
+    test_rc = mkavl_test_delete(input, mkavl_test_item_fn,
+                                mkavl_test_delete_context,
+                                mkavl_test_delete_context);
     if (!test_rc) {
         goto err_exit;
     }
@@ -1610,7 +1849,8 @@ run_mkavl_test (mkavl_test_input_st *input)
      * Destroy both trees: make sure the delete function is called as expected
      * for the copied tree.
      */
-    test_rc = mkavl_test_delete(input, mkavl_test_item_fn);
+    test_rc = mkavl_test_delete(input, mkavl_test_item_fn,
+                                mkavl_test_delete_context, NULL);
     if (!test_rc) {
         goto err_exit;
     }
@@ -1634,16 +1874,8 @@ run_mkavl_test (mkavl_test_input_st *input)
 
 err_exit:
 
-    ctx = NULL;
-    if (NULL != input->tree_copy_h) {
-        ctx = mkavl_get_tree_context(input->tree_copy_h);
-    }
-
-    mkavl_test_delete(input, mkavl_test_item_fn);
-
-    if (NULL != ctx) {
-        free(ctx);
-    }
+    mkavl_test_delete(input, mkavl_test_item_fn, mkavl_test_delete_context,
+                      mkavl_test_delete_context);
 
     return (false);
 }

@@ -375,12 +375,25 @@ mkavl_free_wrapper (struct libavl_allocator *allocator, void *libavl_block)
                 mkavl_allocator->tree_h->context));
 }
 
+/**
+ * The default malloc function.
+ *
+ * @param size Size of memory to allocate.
+ * @param context The tree context.
+ * @return A pointer to the memory or NULL if allocation was not possible.
+ */
 static void *
 mkavl_default_malloc_fn (size_t size, void *context)
 {
     return (malloc(size));
 }
 
+/**
+ * The default free function.
+ *
+ * @param ptr The memory to free.
+ * @param context The tree context.
+ */
 static void
 mkavl_default_free_fn (void *ptr, void *context)
 {

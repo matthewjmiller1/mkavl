@@ -59,7 +59,7 @@
  * create an mkavl tree with two comparison function keyed in the following
  * manner:
  *
- *    -# <tt>Key1: <ID></tt>
+ *    -# <tt>Key1: &lt;ID&gt;</tt>
  *    -# <tt>Key2: <LastName | ID></tt>
  *
  * Knowing the zero is the minimum ID value, you could lookup the first employee
