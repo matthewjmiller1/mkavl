@@ -1,0 +1,3 @@
+*.o
+test_employee_db
+test_malloc
