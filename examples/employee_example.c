@@ -346,12 +346,10 @@ generate_employee (employee_obj_st **obj)
     local_obj->id = next_id++;
     first_name_idx = (rand() % NELEMS(first_names));
     last_name_idx = (rand() % NELEMS(last_names));
-    strncpy(local_obj->first_name, first_names[first_name_idx],
-            sizeof(local_obj->first_name));
-    local_obj->first_name[(sizeof(local_obj->first_name) - 1)] = '\0';
-    strncpy(local_obj->last_name, last_names[last_name_idx],
-            sizeof(local_obj->last_name));
-    local_obj->last_name[(sizeof(local_obj->last_name) - 1)] = '\0';
+    my_strlcpy(local_obj->first_name, first_names[first_name_idx],
+               sizeof(local_obj->first_name));
+    my_strlcpy(local_obj->last_name, last_names[last_name_idx],
+               sizeof(local_obj->last_name));
 
     *obj = local_obj;
 
@@ -382,13 +380,55 @@ free_employee (void *item, void *context)
 }
 
 static void
+lookup_employees_by_last_name (employee_example_input_st *input,
+                               const char *last_name, uint32_t max_records,
+                               bool find_all, bool do_print)
+{
+    employee_obj_st *found_item;
+    employee_obj_st lookup_item = {0};
+    uint32_t num_records = 0;
+    mkavl_rc_e rc;
+
+    /* Set ID to the minimum possible value */
+    lookup_item.id = 0;
+    my_strlcpy(lookup_item.last_name, last_name, sizeof(lookup_item.last_name));
+
+    rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_GE,
+                    EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID, &lookup_item,
+                    (void **) &found_item);
+    assert_abort(mkavl_rc_e_is_ok(rc));
+
+    while ((NULL != found_item) &&
+           (0 == strncmp(last_name, found_item->last_name,
+                         sizeof(found_item->last_name))) &&
+           (find_all || (num_records < max_records))) {
+
+        if (do_print) {
+            printf("%2u. ", (num_records + 1));
+            display_employee(found_item);
+        }
+
+        rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_GT,
+                        EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID, found_item,
+                        (void **) &found_item);
+        assert_abort(mkavl_rc_e_is_ok(rc));
+        ++num_records;
+    }
+
+}
+
+static void
 run_employee_example (employee_example_input_st *input)
 {
     employee_obj_st *cur_item, *found_item;
     employee_obj_st lookup_item = {0};
+    const uint32_t lookup_cnt = 10;
     mkavl_rc_e mkavl_rc;
     bool bool_rc;
-    uint32_t i;
+    uint32_t i, idx;
+    uint32_t lookup_id;
+    const char *new_last_name;
+    char old_last_name[MAX_NAME_LEN];
 
     printf("\n");
 
@@ -410,12 +450,12 @@ run_employee_example (employee_example_input_st *input)
         assert_abort((NULL == found_item) && 
                      mkavl_rc_e_is_ok(mkavl_rc));
     }
-    printf("Added %u employees to DB\n", mkavl_count(input->tree_h));
 
-    printf("*** Testing functionality ***\n");
+    printf("*** Testing functionality ***\n\n");
 
+    printf("Find %u employees by ID\n", lookup_cnt);
     for (i = 0; i < 10; ++i) {
-        uint32_t lookup_id = (1 + (rand() % input->opts->employee_cnt));
+        lookup_id = (1 + (rand() % input->opts->employee_cnt));
         lookup_item.id = lookup_id;
         mkavl_rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
                               EMPLOYEE_EXAMPLE_KEY_E_ID,
@@ -423,11 +463,91 @@ run_employee_example (employee_example_input_st *input)
                               (void **) &found_item);
         assert_abort((NULL != found_item) && 
                      mkavl_rc_e_is_ok(mkavl_rc));
-        printf("Looking up ID %u:\n   ", lookup_id);
+        printf("Looking up ID %u: ", lookup_id);
         display_employee(found_item);
     }
+    printf("\n");
+
+    idx = (rand() % NELEMS(last_names));
+    printf("Finding up to first %u employees with last name %s\n",
+           lookup_cnt, last_names[idx]);
+    lookup_employees_by_last_name(input, last_names[idx], lookup_cnt,
+                                  false, true);
+    
+    printf("\n");
+
+    lookup_id = (1 + (rand() % input->opts->employee_cnt));
+    lookup_item.id = lookup_id;
+    mkavl_rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                          EMPLOYEE_EXAMPLE_KEY_E_ID,
+                          &lookup_item,
+                          (void **) &found_item);
+    assert_abort((NULL != found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+    cur_item = found_item;
+
+    idx = (rand() % NELEMS(last_names));
+    new_last_name = last_names[idx];
+    my_strlcpy(old_last_name, cur_item->last_name, sizeof(old_last_name));
+
+    printf("Changing last name of %s %s (ID=%u) to %s\n",
+           cur_item->first_name, cur_item->last_name, cur_item->id,
+           new_last_name);
+
+    mkavl_rc = mkavl_remove_key_idx(input->tree_h,
+                                    EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID, cur_item,
+                                    (void **) &found_item);
+    assert_abort((NULL != found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+    cur_item = found_item;
+
+    my_strlcpy(cur_item->last_name, new_last_name, sizeof(cur_item->last_name));
+
+    mkavl_rc = mkavl_add_key_idx(input->tree_h, EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID,
+                                 cur_item, (void **) &found_item);
+    assert_abort((NULL == found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+
+    lookup_item.id = cur_item->id;
+    mkavl_rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                          EMPLOYEE_EXAMPLE_KEY_E_ID,
+                          &lookup_item,
+                          (void **) &found_item);
+    assert_abort((NULL != found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+    printf("Lookup for ID %u: ", lookup_item.id);
+    display_employee(found_item);
+
+    lookup_item.id = cur_item->id;
+    my_strlcpy(lookup_item.last_name, cur_item->last_name,
+               sizeof(lookup_item.last_name));
+    mkavl_rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                          EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID,
+                          &lookup_item,
+                          (void **) &found_item);
+    assert_abort((NULL != found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+    printf("Lookup for last name \"%s\", ID %u:\n   ", lookup_item.last_name,
+           lookup_item.id);
+    display_employee(found_item);
+
+    my_strlcpy(lookup_item.last_name, old_last_name,
+               sizeof(lookup_item.last_name));
+    mkavl_rc = mkavl_find(input->tree_h, MKAVL_FIND_TYPE_E_EQUAL, 
+                          EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID,
+                          &lookup_item,
+                          (void **) &found_item);
+    assert_abort((NULL == found_item) && 
+                 mkavl_rc_e_is_ok(mkavl_rc));
+    printf("Lookup for last name \"%s\", ID %u: not found\n", old_last_name,
+           lookup_item.id);
+
+    printf("\n");
 
     printf("*** Testing performance ***\n");
+
+    // TODO: lookup several last names and via a walk through the tree and time
+    // each.
 
     mkavl_rc = mkavl_delete(&(input->tree_h), free_employee, NULL);
     assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
