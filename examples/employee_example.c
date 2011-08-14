@@ -23,6 +23,7 @@
  */
 
 #include "examples_common.h"
+#include <math.h>
 
 /** The default employee count for runs */
 static const uint32_t default_employee_cnt = 1000;
@@ -102,8 +103,15 @@ typedef struct employee_example_input_st_ {
     mkavl_tree_handle tree_h;
 } employee_example_input_st;
 
-/** Magic value for sanity checks */
-#define MKAVL_TEST_MAGIC 0x1234ABCD
+
+typedef struct employee_ctx_st_ {
+    uint32_t nodes_walked;
+    uint32_t match_cnt;
+} employee_ctx_st;
+
+typedef struct employee_walk_ctx_st_ {
+    char lookup_last_name[MAX_NAME_LEN];
+} employee_walk_ctx_st;
 
 /**
  * The context storted for a tree.
@@ -279,11 +287,14 @@ employee_cmp_by_last_name (const void *item1, const void *item2, void *context)
 {
     const employee_obj_st *e1 = item1;
     const employee_obj_st *e2 = item2;
+    employee_ctx_st *ctx = (employee_ctx_st *) context;
     int32_t str_rc;
 
-    if ((NULL == e1) || (NULL == e2)) {
+    if ((NULL == e1) || (NULL == e2) || (NULL == ctx)) {
         abort();
     }
+
+    ++(ctx->nodes_walked);
 
     /* 
      * Compare by last name first.  This ensures last names are grouped
@@ -388,6 +399,9 @@ lookup_employees_by_last_name (employee_example_input_st *input,
     employee_obj_st lookup_item = {0};
     uint32_t num_records = 0;
     mkavl_rc_e rc;
+    employee_ctx_st *ctx = mkavl_get_tree_context(input->tree_h);
+
+    assert_abort(NULL != ctx);
 
     /* Set ID to the minimum possible value */
     lookup_item.id = 0;
@@ -415,6 +429,30 @@ lookup_employees_by_last_name (employee_example_input_st *input,
         ++num_records;
     }
 
+    ctx->match_cnt = num_records;
+}
+
+static mkavl_rc_e
+last_name_walk_cb (void *item, void *tree_context, void *walk_context,
+                   bool *stop_walk)
+{
+    employee_obj_st *e = item;
+    employee_ctx_st *ctx = (employee_ctx_st *) tree_context;
+    employee_walk_ctx_st *walk_ctx = (employee_walk_ctx_st *) walk_context;
+
+    if ((NULL == e) || (NULL == ctx) || (NULL == walk_ctx) ||
+        (NULL == stop_walk)) {
+        return (MKAVL_RC_E_EINVAL);
+    }
+    *stop_walk = false;
+
+    ++(ctx->nodes_walked);
+    if (0 == strncmp(e->last_name, walk_ctx->lookup_last_name,
+                     sizeof(e->last_name))) {
+        ++(ctx->match_cnt);
+    }
+
+    return (MKAVL_RC_E_SUCCESS);
 }
 
 static void
@@ -423,17 +461,25 @@ run_employee_example (employee_example_input_st *input)
     employee_obj_st *cur_item, *found_item;
     employee_obj_st lookup_item = {0};
     const uint32_t lookup_cnt = 10;
+    const char *last_name_lookups[20];
+    uint32_t match_cnt_array[NELEMS(last_name_lookups)] = {0};
     mkavl_rc_e mkavl_rc;
     bool bool_rc;
     uint32_t i, idx;
     uint32_t lookup_id;
     const char *new_last_name;
     char old_last_name[MAX_NAME_LEN];
+    struct timeval tv;
+    double t1, t2;
+    double key_lookup_time, nonkey_lookup_time;
+    uint32_t key_nodes_walked, nonkey_nodes_walked;
+    employee_ctx_st ctx = {0};
+    employee_walk_ctx_st walk_ctx = {{0}};
 
     printf("\n");
 
     mkavl_rc = mkavl_new(&(input->tree_h), cmp_fn_array, NELEMS(cmp_fn_array),
-                         NULL, NULL);
+                         &ctx, NULL);
     assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
 
     for (i = 0; i < input->opts->employee_cnt; ++i) {
@@ -537,18 +583,77 @@ run_employee_example (employee_example_input_st *input)
                           EMPLOYEE_EXAMPLE_KEY_E_LNAME_ID,
                           &lookup_item,
                           (void **) &found_item);
-    assert_abort((NULL == found_item) && 
-                 mkavl_rc_e_is_ok(mkavl_rc));
-    printf("Lookup for last name \"%s\", ID %u: not found\n", old_last_name,
+    assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
+    printf("Lookup for last name \"%s\", ID %u: ", old_last_name,
            lookup_item.id);
+    if (NULL == found_item) {
+        printf("not found");
+    } else { 
+        display_employee(found_item);
+    }
+    printf("\n");
 
     printf("\n");
 
-    printf("*** Testing performance ***\n");
+    printf("*** Testing performance ***\n\n");
 
-    // TODO: lookup several last names and via a walk through the tree and time
-    // each.
+    // TODO: pareto or gaussian distribution for last names.
 
+    /* Fill in last names to lookup */
+    for (i = 0; i < NELEMS(last_name_lookups); ++i) {
+        idx = (rand() % NELEMS(last_names));
+        last_name_lookups[i] = last_names[idx];
+    }
+
+    /* Test keyed lookup */
+    gettimeofday(&tv, NULL);
+    t1 = timeval_to_seconds(&tv);
+    ctx.nodes_walked = 0;
+
+    for (i = 0; i < NELEMS(last_name_lookups); ++i) {
+        lookup_employees_by_last_name(input, last_name_lookups[i], 0,
+                                      true, false);
+        match_cnt_array[i] = ctx.match_cnt;
+    }
+
+    gettimeofday(&tv, NULL);
+    t2 = timeval_to_seconds(&tv);
+
+    key_lookup_time = (t2 - t1);
+    key_nodes_walked = ctx.nodes_walked;
+
+    /* Test non-keyed lookup */
+    gettimeofday(&tv, NULL);
+    t1 = timeval_to_seconds(&tv);
+    ctx.nodes_walked = 0;
+
+    for (i = 0; i < NELEMS(last_name_lookups); ++i) {
+        ctx.match_cnt = 0;
+        my_strlcpy(walk_ctx.lookup_last_name, last_name_lookups[i],
+                   sizeof(walk_ctx.lookup_last_name));
+        mkavl_rc = mkavl_walk(input->tree_h, last_name_walk_cb, &walk_ctx);
+        assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
+        if (match_cnt_array[i] != ctx.match_cnt) {
+            printf("ERROR: for name %s, keyed lookup found %u matches and "
+                   "non-key lookup found %u matches\n",
+                   last_name_lookups[i], match_cnt_array[i], ctx.match_cnt);
+
+        }
+    }
+
+    gettimeofday(&tv, NULL);
+    t2 = timeval_to_seconds(&tv);
+
+    nonkey_lookup_time = (t2 - t1);
+    nonkey_nodes_walked = ctx.nodes_walked;
+
+    printf("Keyed lookup time: %.6lfs, Non-keyed lookup time: %.6lfs, "
+           "Ratio: %.2lf\n", key_lookup_time, nonkey_lookup_time,
+           (key_lookup_time / nonkey_lookup_time));
+    printf("Keyed nodes compared: %u, Non-keyed nodes walked: %u, "
+           "Ratio: %.2lf\n", key_nodes_walked, nonkey_nodes_walked,
+           ((double) key_nodes_walked / nonkey_nodes_walked));
+    
     mkavl_rc = mkavl_delete(&(input->tree_h), free_employee, NULL);
     assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
 
@@ -566,6 +671,26 @@ main (int argc, char *argv[])
     employee_example_input_st input = {0};
 
     parse_command_line(argc, argv, &opts);
+
+    /*
+    {
+        srand(opts.seed);
+        double r, u, h, l, a;
+        uint32_t i;
+        h = 101.0;
+        l = 1.0;
+        a = 0.5;
+        for (i = 0; i < 500; ++i) {
+            u = ((double) rand() / RAND_MAX);
+            r = pow((pow(l, a) / (u*pow((l/h), a) - u + 1)), (1.0/a));
+            //r=(1.0 * pow(1- ((double) rand() / RAND_MAX) , (-1/3.0)));
+            if (floor(r) > 98) {
+                printf("r=%lf\n", r);
+            }
+        }
+        exit(EXIT_SUCCESS);
+    }
+    */
 
     printf("\n");
     cur_seed = opts.seed;
