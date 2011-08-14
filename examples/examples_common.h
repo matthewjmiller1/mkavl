@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/time.h>
 #include "../mkavl.h"
 
 /**
@@ -67,6 +68,16 @@ assert_abort (bool condition)
     if (!condition) {
         abort();
     }
+}
+
+static inline double
+timeval_to_seconds (struct timeval *tv)
+{
+    if (NULL == tv) {
+        return (0.0);
+    }
+
+    return (tv->tv_sec + (tv->tv_usec / 1000000.0));
 }
 
 static size_t 
