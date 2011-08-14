@@ -19,27 +19,29 @@
  *
  * @section DESCRIPTION
  *
- * Unit test for mkavl library.
+ * Unit test for mkavl library.  
  *
- *  test_mkavl -h
- *
- *  Test the mkavl structure
- *
- *  Usage:
- *  -s <seed>
- *     The starting seed for the RNG (default=seeded by time()).
- *  -n <nodes>
- *     The number of nodes to place in the trees (default=15).
- *  -b <range beginning>
- *     The smallest (inclusive ) possible data value in the range of values
- *     (default=0).
- *  -e <range ending>
- *     The largest (exclusive) possible data value in the range of values
- *     (default=100).
- *  -r <runs>
- *     The number of runs to do (default=15).
- *  -v <verbosity level>
- *     A higher number gives more output (default=0).
+ * \verbatim
+    Test the mkavl structure
+  
+    Usage:
+    -s <seed>
+       The starting seed for the RNG (default=seeded by time()).
+    -n <nodes>
+       The number of nodes to place in the trees (default=15).
+    -b <range beginning>
+       The smallest (inclusive ) possible data value in the range of values
+       (default=0).
+    -e <range ending>
+       The largest (exclusive) possible data value in the range of values
+       (default=100).
+    -r <runs>
+       The number of runs to do (default=15).
+    -v <verbosity level>
+       A higher number gives more output (default=0).
+   -h
+      Display this help message.
+   \endverbatim
  */
 
 #include <stdlib.h>
@@ -135,6 +137,8 @@ print_usage (bool do_exit, int32_t exit_val)
     printf("-v <verbosity level>\n"
            "   A higher number gives more output (default=%u).\n",
            default_verbosity);
+    printf("-h\n"
+           "   Display this help message.\n");
     printf("\n");
 
     if (do_exit) {
