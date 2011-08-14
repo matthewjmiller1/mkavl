@@ -13,7 +13,7 @@ CFLAGS=-Wall -Werror -g
 ODIR=obj
 LDIR=../lib
 
-LIBS=-lmkavl
+LIBS=-lmkavl -lm
 
 LIB_NAME=libmkavl.so
 
