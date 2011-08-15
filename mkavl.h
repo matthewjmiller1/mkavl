@@ -51,6 +51,16 @@
  * <a href="http://www.stanford.edu/~blp/avl/">Ben Plaff's open source 
  * AVL library</a>.
  *
+ * In essence, this adds two things the backend AVL implementation.  First, it
+ * more transparently handles a single data item being added to multiple AVL
+ * trees (each keyed differently).  Second, it provides for greater than and
+ * less than lookups for keys not in the tree.  E.g., if you wanted to find the
+ * first ID greater than X, you can do this even if X itself doesn't exist in
+ * the AVL.
+ *
+ * For the unit test of this library, see test_mkavl.c.  For example usage,
+ * see employee_example.c
+ *
  * \section sec_example Example
  *
  * A more complex example is, say you want to be able to query your employee

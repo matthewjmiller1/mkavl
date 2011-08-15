@@ -508,6 +508,9 @@ mkavl_test_copy_free (void *ptr, void *context)
     free(ptr);
 }
 
+/**
+ * Allocators to use for the copied tree.
+ */
 static mkavl_allocator_st copy_allocator = {
     mkavl_test_copy_malloc,
     mkavl_test_copy_free

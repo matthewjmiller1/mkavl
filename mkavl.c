@@ -400,12 +400,17 @@ mkavl_default_free_fn (void *ptr, void *context)
     return (free(ptr));
 }
 
-/* By default, we'll just use malloc and free if the client passes nothing in */
+/** 
+ * By default, we'll just use malloc and free if the client passes nothing in.
+ */
 static mkavl_allocator_st mkavl_allocator_default = {
     mkavl_default_malloc_fn,
     mkavl_default_free_fn
 };
 
+/**
+ * Wrapper to convert AVL callback to client callback passed to mkavl.
+ */
 static struct libavl_allocator mkavl_allocator_wrapper = {
     mkavl_malloc_wrapper,
     mkavl_free_wrapper

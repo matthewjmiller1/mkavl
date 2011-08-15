@@ -70,6 +70,12 @@ assert_abort (bool condition)
     }
 }
 
+/**
+ * Utility to convert time objects to seconds.
+ *
+ * @param tv The time object.
+ * @return The value in seconds.
+ */
 static inline double
 timeval_to_seconds (struct timeval *tv)
 {
@@ -80,8 +86,19 @@ timeval_to_seconds (struct timeval *tv)
     return (tv->tv_sec + (tv->tv_usec / 1000000.0));
 }
 
+/**
+ * Sigh, yes for reasons divorced from reality, you just have to keep
+ * implementing this.  Copied from the BSD source.  See 
+ * <a href="http://en.wikipedia.org/wiki/Strlcpy">Wikipedia</a> for more
+ * documentation.
+ *
+ * @param dst The destination string.
+ * @param src The source string.
+ * @param siz The size of the destination buffer.
+ * @return The length of the source string.
+ */
 static size_t 
-my_strlcpy(char *dst, const char *src, size_t siz)
+my_strlcpy (char *dst, const char *src, size_t siz)
 {
     char *d = dst;
     const char *s = src;

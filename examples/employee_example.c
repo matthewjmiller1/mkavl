@@ -19,11 +19,78 @@
  *
  * @section DESCRIPTION
  *
- * Unit test for mkavl library.
+ * This is an example of how the mkavl library can be used.  This example
+ * consists of a DB of employees where their unique ID and first and last name
+ * is stored.  The first names of employees are chosen uniformly at random from
+ * a list of 100 popular names.  The last names of employees are, by default,
+ * chosen uniformly at random from a list of 100 common names.  There is a
+ * command-line option to use a 
+ * <a href="http://en.wikipedia.org/wiki/Zipf_distribution">Zipf 
+ * distribution</a> instead for the last name to
+ * give significantly more weight towards choosing the most popular names.
+ *
+ * Running the example gives two phases: functionality and performance.
+ *
+ * For functionality:
+ *    -# Choose ten IDs uniformly at random and lookup the employee objects.
+ *    -# Choose a last name uniformly at random and lookup up to the first ten
+ *    employees with that last name.  Note that this is done in <i>O(lg N)</i>
+ *    time.
+ *    -# Change the last name of an employee and show that all the lookups
+ *    happen as expected.
+ *
+ * For performance:
+ *    -#  Choose 30 last names uniformly at random.  Lookup all the employees
+ *    with each last name using the mkavl tree keyed by last name and ID
+ *    (<i>O(lg N)</i>).  Then, lookup all the employees with each last name in
+ *    the tree by walking through all nodes (as would typically be done for a
+ *    non-key field) (<i>O(N)</i>).
+ *    -# Compare the wall clock time (i.e., from gettimeofday()) for both lookup
+ *    methods and the total number of nodes walked for each method.
+ *
+ * Performance results show for 1000 employees and 100 last names, the keyed
+ * lookup shows an improvement by a factor of 10 for uniformly distributed last
+ * names.  For a Zipf distribution, a majority of the runs show about a factor
+ * of 20 improvement.  However, some Zipf runs only show an improvement of about
+ * 3 (presumably when some of the most popular names are randomly chosen and
+ * there are just inherently a lot of employees to lookup for that name).
+ *
+ * \verbatim
+   Example of using mkavl for an employee DB
+   
+   Usage:
+   -s <seed>
+      The starting seed for the RNG (default=seeded by time()).
+   -n <employees>
+      The number of nodes to place in the trees (default=1000).
+   -r <runs>
+      The number of runs to do (default=1).
+   -v <verbosity level>
+      A higher number gives more output (default=0).
+   -z
+      Use Zipf distribution for last names (default=uniform).
+   -a <Zipf alpha>
+      If using a Zipf distribution, the alpha value to    
+      parameterize the distribution (default=1.000000).
+   -h
+      Display this help message.
+   \endverbatim
  */
 
 #include "examples_common.h"
 #include <math.h>
+
+/**
+ * Probability distributions used within example.
+ */
+typedef enum employee_dist_e_ {
+    /** Uniform distribution */
+    EMPLOYEE_DIST_E_UNIFORM,
+    /** Zipf distribution */
+    EMPLOYEE_DIST_E_ZIPF,
+    /** Max value for boundary checking */
+    EMPLOYEE_DIST_E_MAX,
+} employee_dist_e;
 
 /** The default employee count for runs */
 static const uint32_t default_employee_cnt = 1000;
@@ -31,6 +98,10 @@ static const uint32_t default_employee_cnt = 1000;
 static const uint32_t default_run_cnt = 1;
 /** The default verbosity level of messages displayed */
 static const uint8_t default_verbosity = 0;
+/** The default last name distribution function */
+static const employee_dist_e default_last_name_dist = EMPLOYEE_DIST_E_UNIFORM;
+/** The default alpha parameter for the Zipf distribution */
+static const double default_zipf_alpha = 1.0;
 
 /**
  * Upper bound on name string lengths.
@@ -49,6 +120,10 @@ typedef struct employee_example_opts_st_ {
     uint32_t seed;
     /** The verbosity level for the test */
     uint8_t verbosity;
+    /** The distribution function to use for last names */
+    employee_dist_e last_name_dist;
+    /** The alpha value to parameterize a Zipf distribution */
+    double zipf_alpha;
 } employee_example_opts_st;
 
 /** List of first names to choose from employees */
@@ -87,9 +162,15 @@ static const char *last_names[] = {
     "Bryant", "Alexander", "Russell", "Griffin", "Diaz", "Hayes"
 };
 
+/**
+ * The data stored for employees.
+ */
 typedef struct employee_obj_st_ {
+    /** Unique ID for the employee */
     uint32_t id;
+    /** First name */
     char first_name[MAX_NAME_LEN];
+    /** Last name */
     char last_name[MAX_NAME_LEN];
 } employee_obj_st;
 
@@ -103,31 +184,75 @@ typedef struct employee_example_input_st_ {
     mkavl_tree_handle tree_h;
 } employee_example_input_st;
 
-
+/**
+ * The context associated with the employee AVLs.
+ */
 typedef struct employee_ctx_st_ {
+    /** Counter for the number of nodes walked for a given test */
     uint32_t nodes_walked;
+    /** Counter for the number of matches found for a given test */
     uint32_t match_cnt;
 } employee_ctx_st;
 
+/**
+ * Context for the walk of the employee AVLs.
+ */
 typedef struct employee_walk_ctx_st_ {
+    /** Last name for which the walk is being done */
     char lookup_last_name[MAX_NAME_LEN];
 } employee_walk_ctx_st;
 
 /**
- * The context storted for a tree.
+ * Get a random variable from a Zipf distribution within the range [1,n].
+ * Implementation is from:
+ * http://www.cse.usf.edu/~christen/tools/genzipf.c
+ *
+ * @param alpha The alpha paremeter for the distribution.
+ * @param n The maximum value (inclusive) for the random variable.
+ * @return A value between 1 and n (inclusive).
  */
-typedef struct mkavl_test_ctx_st_ {
-    /** A sanity check field */
-    uint32_t magic;
-    /** A count for how many times mkavl_test_copy_fn() was called */
-    uint32_t copy_cnt;
-    /** A count for how many times mkavl_test_item_fn() was called */
-    uint32_t item_fn_cnt;
-    /** A count for how many time mkavl_test_copy_malloc() was called */ 
-    uint32_t copy_malloc_cnt;
-    /** A count for how many time mkavl_test_copy_free() was called */ 
-    uint32_t copy_free_cnt;
-} mkavl_test_ctx_st;
+static uint32_t
+zipf (double alpha, uint32_t n)
+{
+    static uint32_t cached_n = 0;
+    static double cached_c = 0.0;
+    double z;
+    double sum_prob;
+    double zipf_value;
+    double c = 0.0;
+    uint32_t i;
+
+    if (n != cached_n) {
+        for (i = 1; i <= n; ++i) {
+            c = (c + (1.0 / pow((double) i, alpha)));
+        }
+        cached_c = (1.0 / c);
+        cached_n = n;
+    }
+    c = cached_c;
+
+    /* Insert industrial strength RNG method here */
+    z = ((double) rand() / RAND_MAX);
+
+    /* Map z to the value */
+    sum_prob = 0;
+    for (i = 1; i <= n; i++) {
+        sum_prob = sum_prob + (c / pow((double) i, alpha));
+        if (sum_prob >= z) {
+            zipf_value = i;
+            break;
+        }
+    }
+
+    /* Equations below are for Pareto and bounded Pareto distributions */
+    //r=(m * pow((1- z), (-1/a)));
+    //r = pow((pow(l, a) / (z*pow((l/h), a) - z + 1)), (1.0/a));
+
+    /* Assert that zipf_value is between 1 and N */
+   assert_abort((zipf_value >= 1) && (zipf_value <= n));
+
+    return (zipf_value);
+}
 
 /**
  * Display the program's help screen and exit as needed.
@@ -151,6 +276,14 @@ print_usage (bool do_exit, int32_t exit_val)
     printf("-v <verbosity level>\n"
            "   A higher number gives more output (default=%u).\n",
            default_verbosity);
+    printf("-z\n"
+           "   Use Zipf distribution for last names (default=uniform).\n");
+    printf("-a <Zipf alpha>\n"
+           "   If using a Zipf distribution, the alpha value to\n"
+           "   parameterize the distribution (default=%lf).\n",
+           default_zipf_alpha);
+    printf("-h\n"
+           "   Display this help message.\n");
     printf("\n");
 
     if (do_exit) {
@@ -171,8 +304,10 @@ print_opts (employee_example_opts_st *opts)
     }
 
     printf("employee_example_opts: seed=%u, employee_cnt=%u, run_cnt=%u,\n"
-           "                       verbosity=%u\n",
-           opts->seed, opts->employee_cnt, opts->run_cnt, opts->verbosity);
+           "                       verbosity=%u last_name_dist=%u\n"
+           "                       zipf_alpha=%lf\n",
+           opts->seed, opts->employee_cnt, opts->run_cnt, opts->verbosity,
+           opts->last_name_dist, opts->zipf_alpha);
 }
 
 /**
@@ -188,6 +323,7 @@ parse_command_line (int argc, char **argv, employee_example_opts_st *opts)
     int c;
     char *end_ptr;
     uint32_t val;
+    double dval;
 
     if (NULL == opts) {
         return;
@@ -196,9 +332,11 @@ parse_command_line (int argc, char **argv, employee_example_opts_st *opts)
     opts->employee_cnt = default_employee_cnt;
     opts->run_cnt = default_run_cnt;
     opts->verbosity = default_verbosity;
+    opts->last_name_dist = default_last_name_dist;
+    opts->zipf_alpha = default_zipf_alpha;
     opts->seed = (uint32_t) time(NULL);
 
-    while ((c = getopt(argc, argv, "n:r:v:s:h")) != -1) {
+    while ((c = getopt(argc, argv, "n:r:v:s:hza:")) != -1) {
         switch (c) {
         case 'n':
             val = strtol(optarg, &end_ptr, 10);
@@ -224,6 +362,15 @@ parse_command_line (int argc, char **argv, employee_example_opts_st *opts)
                 opts->seed = val;
             }
             break;
+        case 'a':
+            dval = strtod(optarg, &end_ptr);
+            if ((end_ptr != optarg) && (0 == errno)) {
+                opts->zipf_alpha = dval;
+            }
+            break;
+        case 'z':
+            opts->last_name_dist = EMPLOYEE_DIST_E_ZIPF;
+            break;
         case 'h':
         case '?':
         default:
@@ -239,6 +386,12 @@ parse_command_line (int argc, char **argv, employee_example_opts_st *opts)
     if (0 == opts->employee_cnt) {
         printf("Error: employee count(%u) must be non-zero\n",
                opts->employee_cnt);
+        print_usage(true, EXIT_SUCCESS);
+    }
+
+    if (!(opts->zipf_alpha >= 0.0)) {
+        printf("Error: Zipf alpha(%lf) must be greater than 0.0\n",
+               opts->zipf_alpha);
         print_usage(true, EXIT_SUCCESS);
     }
 
@@ -337,8 +490,18 @@ static mkavl_compare_fn cmp_fn_array[] = {
 CT_ASSERT(NELEMS(cmp_fn_array) == EMPLOYEE_EXAMPLE_KEY_E_MAX);
 /** @endcond */
 
+/**
+ * Allocate and fill in the data for an employee object.  The ID of the employee
+ * is a unique value for the employee.  The first name is chosen from a uniform
+ * distribution of 100 names.  The last name is chosen according to the given
+ * distribution of 100 names.
+ *
+ * @param input The input parameters.
+ * @param obj A pointer to fill in with the newly allocated object.
+ * @return true if the creation was successful.
+ */
 static bool
-generate_employee (employee_obj_st **obj)
+generate_employee (employee_example_input_st *input, employee_obj_st **obj)
 {
     static uint32_t next_id = 1;
     employee_obj_st *local_obj;
@@ -356,7 +519,17 @@ generate_employee (employee_obj_st **obj)
 
     local_obj->id = next_id++;
     first_name_idx = (rand() % NELEMS(first_names));
-    last_name_idx = (rand() % NELEMS(last_names));
+    switch (input->opts->last_name_dist) {
+    case EMPLOYEE_DIST_E_UNIFORM:
+        last_name_idx = (rand() % NELEMS(last_names));
+        break;
+    case EMPLOYEE_DIST_E_ZIPF:
+        last_name_idx = (zipf(input->opts->zipf_alpha, NELEMS(last_names)) - 1);
+        break;
+    default:
+        abort();
+        break;
+    }
     my_strlcpy(local_obj->first_name, first_names[first_name_idx],
                sizeof(local_obj->first_name));
     my_strlcpy(local_obj->last_name, last_names[last_name_idx],
@@ -367,6 +540,11 @@ generate_employee (employee_obj_st **obj)
     return (true);
 }
 
+/**
+ * Display the given employee object.
+ *
+ * @param obj The object to display.
+ */
 static void
 display_employee (employee_obj_st *obj)
 {
@@ -378,6 +556,13 @@ display_employee (employee_obj_st *obj)
            obj->last_name);
 }
 
+/**
+ * Callback to free the given employee object.
+ *
+ * @param item The pointer to the object.
+ * @param context Context for the tree.
+ * @return The return code
+ */
 static mkavl_rc_e
 free_employee (void *item, void *context)
 {
@@ -390,6 +575,17 @@ free_employee (void *item, void *context)
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Look up a (sub)set of employees by their last name.
+ *
+ * @param input The input parameters for the run.
+ * @param last_name The last name for which to search.
+ * @param max_records The maximum number of records to find (if find_all is
+ * false).
+ * @param find_all If true, then find all employee records for the given last
+ * name (max_records is ignored in this case).
+ * @param do_print Whether to print the info for each record.
+ */
 static void
 lookup_employees_by_last_name (employee_example_input_st *input,
                                const char *last_name, uint32_t max_records,
@@ -432,6 +628,15 @@ lookup_employees_by_last_name (employee_example_input_st *input,
     ctx->match_cnt = num_records;
 }
 
+/**
+ * Callback for walking the tree to find all records for a given last name.
+ *
+ * @param item The current employee object.
+ * @param tree_context The context for the tree.
+ * @param walk_context The context for the walk.
+ * @param stop_walk Setting to true will stop the walk immediately upon return.
+ * @return The return code.
+ */
 static mkavl_rc_e
 last_name_walk_cb (void *item, void *tree_context, void *walk_context,
                    bool *stop_walk)
@@ -455,13 +660,18 @@ last_name_walk_cb (void *item, void *tree_context, void *walk_context,
     return (MKAVL_RC_E_SUCCESS);
 }
 
+/**
+ * Run a single instance of an example.
+ *
+ * @param input The input parameters for the run.
+ */
 static void
 run_employee_example (employee_example_input_st *input)
 {
     employee_obj_st *cur_item, *found_item;
     employee_obj_st lookup_item = {0};
     const uint32_t lookup_cnt = 10;
-    const char *last_name_lookups[20];
+    const char *last_name_lookups[30];
     uint32_t match_cnt_array[NELEMS(last_name_lookups)] = {0};
     mkavl_rc_e mkavl_rc;
     bool bool_rc;
@@ -483,7 +693,7 @@ run_employee_example (employee_example_input_st *input)
     assert_abort(mkavl_rc_e_is_ok(mkavl_rc));
 
     for (i = 0; i < input->opts->employee_cnt; ++i) {
-        bool_rc = generate_employee(&cur_item);
+        bool_rc = generate_employee(input, &cur_item);
         assert_abort((NULL != cur_item) && bool_rc);
 
         if (input->opts->verbosity >= 3) {
@@ -597,8 +807,6 @@ run_employee_example (employee_example_input_st *input)
 
     printf("*** Testing performance ***\n\n");
 
-    // TODO: pareto or gaussian distribution for last names.
-
     /* Fill in last names to lookup */
     for (i = 0; i < NELEMS(last_name_lookups); ++i) {
         idx = (rand() % NELEMS(last_names));
@@ -671,26 +879,6 @@ main (int argc, char *argv[])
     employee_example_input_st input = {0};
 
     parse_command_line(argc, argv, &opts);
-
-    /*
-    {
-        srand(opts.seed);
-        double r, u, h, l, a;
-        uint32_t i;
-        h = 101.0;
-        l = 1.0;
-        a = 0.5;
-        for (i = 0; i < 500; ++i) {
-            u = ((double) rand() / RAND_MAX);
-            r = pow((pow(l, a) / (u*pow((l/h), a) - u + 1)), (1.0/a));
-            //r=(1.0 * pow(1- ((double) rand() / RAND_MAX) , (-1/3.0)));
-            if (floor(r) > 98) {
-                printf("r=%lf\n", r);
-            }
-        }
-        exit(EXIT_SUCCESS);
-    }
-    */
 
     printf("\n");
     cur_seed = opts.seed;
