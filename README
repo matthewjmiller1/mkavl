@@ -1,0 +1,25 @@
+See @mainpage documentation in mkavl.h for more details.
+
+This uses a backend AVL tree implementation to allow for more transparent
+handling of placing data in multiple AVL trees keyed by different fields.
+Additionally, it adds greater than and less than lookups for non-existent keys
+(e.g., get all records with ID greater than 100 even if ID=100 doesn't actually
+exist in the tree).
+
+Just run "make" in the root directory to build the mkavl static and dynamic
+libraries.  After having built the library.
+
+To run the unit test:
+    1. cd test
+    2. make
+    3. ./test_mkavl
+        - Use "-h" to see options.
+
+To run some example applications:
+    1. cd examples
+    2. make
+    3. ./employee_example
+        - Use "-h" to see options.
+
+Note that the test and example programs must be run in their respective
+directory as the path to the dynamic library is hard-coded in the executables.
