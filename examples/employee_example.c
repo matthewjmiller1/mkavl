@@ -389,7 +389,7 @@ parse_command_line (int argc, char **argv, employee_example_opts_st *opts)
         print_usage(true, EXIT_SUCCESS);
     }
 
-    if (!(opts->zipf_alpha >= 0.0)) {
+    if (!(opts->zipf_alpha > 0.0)) {
         printf("Error: Zipf alpha(%lf) must be greater than 0.0\n",
                opts->zipf_alpha);
         print_usage(true, EXIT_SUCCESS);
