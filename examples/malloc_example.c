@@ -479,7 +479,6 @@ my_malloc (mkavl_tree_handle tree_h, size_t size)
         new_size = (cur_item->byte_cnt - size);
         cur_item->byte_cnt = size;
 
-        printf("Adding %p, %zu\n", new_addr, new_size);
         bool_rc = generate_memblock(&new_item, new_addr, new_size);
         assert_abort((NULL != new_item) && bool_rc);
 
@@ -536,6 +535,8 @@ my_free (mkavl_tree_handle tree_h, void *ptr)
         assert_abort((NULL != found_item) && 
                      mkavl_rc_e_is_ok(rc));
         new_size += next_item->byte_cnt;
+        free(next_item);
+        next_item = NULL;
     }
 
     rc = mkavl_find(tree_h, MKAVL_FIND_TYPE_E_LT,
@@ -550,6 +551,8 @@ my_free (mkavl_tree_handle tree_h, void *ptr)
                      mkavl_rc_e_is_ok(rc));
         update_item = prev_item;
         new_size += prev_item->byte_cnt;
+        free(cur_item);
+        cur_item = NULL;
     }
 
     rc = mkavl_remove_key_idx(tree_h, MALLOC_EXAMPLE_KEY_E_SIZE, 
@@ -601,7 +604,6 @@ run_malloc_example (malloc_example_input_st *input)
     /* Allocate all the pointers */
     for (i = 0; i < input->opts->malloc_cnt; ++i) {
         size_idx = (rand() % NELEMS(malloc_sizes));
-        printf("allocated size %zu\n", malloc_sizes[size_idx]);
         ptr_array[i] = my_malloc(input->tree_h, malloc_sizes[size_idx]);
         assert_abort(NULL != ptr_array[i]);
     }
