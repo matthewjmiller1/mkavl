@@ -97,7 +97,7 @@ timeval_to_seconds (struct timeval *tv)
  * @param siz The size of the destination buffer.
  * @return The length of the source string.
  */
-static size_t 
+static inline size_t 
 my_strlcpy (char *dst, const char *src, size_t siz)
 {
     char *d = dst;

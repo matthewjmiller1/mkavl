@@ -25,10 +25,10 @@ EMPLOYEE_DB_OBJ = $(patsubst %,$(ODIR)/%,$(_EMPLOYEE_DB_OBJ))
 _MALLOC_OBJ = malloc_example.o
 MALLOC_OBJ = $(patsubst %,$(ODIR)/%,$(_MALLOC_OBJ))
 
-all: employee_example
+all: employee_example malloc_example
 
-#malloc_example: $(MALLOC_OBJ) $(DEPS) $(LDIR)/$(LIB_NAME) 
-#	$(CC) -o $@ $< $(CFLAGS) -Wl,-rpath=$(LDIR) -L $(LDIR) $(LIBS)
+malloc_example: $(MALLOC_OBJ) $(DEPS) $(LDIR)/$(LIB_NAME) 
+	$(CC) -o $@ $< $(CFLAGS) -Wl,-rpath=$(LDIR) -L $(LDIR) $(LIBS)
 
 employee_example: $(EMPLOYEE_DB_OBJ) $(DEPS) $(LDIR)/$(LIB_NAME) 
 	$(CC) -o $@ $< $(CFLAGS) -Wl,-rpath=$(LDIR) -L $(LDIR) $(LIBS)
