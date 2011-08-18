@@ -59,7 +59,7 @@
  * the AVL.
  *
  * For the unit test of this library, see test_mkavl.c.  For example usage,
- * see employee_example.c
+ * see employee_example.c and malloc_example.c.
  *
  * \section sec_example Example
  *
