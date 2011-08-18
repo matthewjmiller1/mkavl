@@ -19,15 +19,58 @@
  *
  * @section DESCRIPTION
  *
- * This is an example of how the mkavl library can be used.
+ * This is a basic example of how the mkavl library can be used for memory
+ * management.  The free and allocated memory blocks are maintained in a single
+ * mvavl DB.  The DB is indexed by the starting address of the memory block as
+ * one key and the other key consists of the allocation status (i.e., free or
+ * allocated), block size, and starting address.
+ *
+ * On a malloc() call, we look up the free block with the size greater than or
+ * equal to the requested size.  This is a O(lg N) best-fit algorithm.  On a
+ * free() call, we change the state of the freed block from allocated to free.
+ * We then check whether the adjacent memory blocks are also free and, if so,
+ * consolidate the blocks into one.
+ *
+ * The example run will:
+ *    -# Allocate 100 pointers
+ *    -# Free up to half of them.
+ *    -# Re-allocate the ones just freed.
+ *    -# Free all the pointers.
+ *
+ * At each step, we print out a graphical display of the curent memory state.
+ * The step where up to half are freed is done by chosing points uniformly at
+ * random by default.  A command  line option allows you to instead free the
+ * first half of the pointers deterministically.
+ *
+ * Of course, this is just an example so we use malloc to generate the AVL items
+ * placed in the tree.  In reality, a more complicated scheme would be
+ * implemented to grab memory for the purpose so malloc isn't being called to
+ * implement malloc.
  *
  * \verbatim
- 
+    Example of using mkavl for an memory allocation
+
+    Usage:
+    -s <seed>
+       The starting seed for the RNG (default=seeded by time()).
+    -b <memory size in bytes>
+       The number of bytes in memory (default=409600).
+    -n <number of allocations>
+       The max number of allocations at any one time (default=100).
+    -r <runs>
+       The number of runs to do (default=1).
+    -l
+       Free/re-allocate linearly (default=uniform distribution).
+    -v <verbosity level>
+       A higher number gives more output (default=0).
+    -h
+       Display this help message.
    \endverbatim
  */
 
 #include "examples_common.h"
 
+/** List of sizes for memory allocations */
 static const size_t malloc_sizes[] = { 4, 8, 512, 4096 };
 
 /** The default number of items to allocated at any one time */
@@ -45,6 +88,21 @@ static void *base_addr = (void *) 0x1234ABCD;
 static size_t max_memory_size;
 
 /**
+ * Patterns for how memory gets freed and re-allocated.
+ */
+typedef enum malloc_pattern_e_ {
+    /** Free and re-allocate the first N memory locations */
+    MALLOC_PATTERN_E_LINEAR,
+    /** 
+     * Free and re-allocated the memory in locations chosen from a uniform
+     * distribution.
+     */
+    MALLOC_PATTERN_E_UNIFORM,
+    /** Max value for boundary checking */
+    MALLOC_PATTERN_E_MAX,
+} malloc_pattern_e;
+
+/**
  * State for the current test execution.
  */
 typedef struct malloc_example_opts_st_ {
@@ -58,6 +116,8 @@ typedef struct malloc_example_opts_st_ {
     uint32_t seed;
     /** The verbosity level for the test */
     uint8_t verbosity;
+    /** The allocation pattern to use */
+    malloc_pattern_e pattern;
 } malloc_example_opts_st;
 
 /**
@@ -115,6 +175,8 @@ print_usage (bool do_exit, int32_t exit_val)
     printf("-r <runs>\n"
            "   The number of runs to do (default=%u).\n",
            default_run_cnt);
+    printf("-l\n"
+           "   Free/re-allocate linearly (default=uniform distribution).\n");
     printf("-v <verbosity level>\n"
            "   A higher number gives more output (default=%u).\n",
            default_verbosity);
@@ -140,9 +202,10 @@ print_opts (malloc_example_opts_st *opts)
     }
 
     printf("malloc_example_opts: seed=%u, malloc_cnt=%u, run_cnt=%u,\n"
-           "                     verbosity=%u, memory_size=%zu\n",
+           "                     verbosity=%u, memory_size=%zu\n"
+           "                     pattern=%u\n",
            opts->seed, opts->malloc_cnt, opts->run_cnt, opts->verbosity,
-           opts->memory_size);
+           opts->memory_size, opts->pattern);
 }
 
 /**
@@ -167,9 +230,10 @@ parse_command_line (int argc, char **argv, malloc_example_opts_st *opts)
     opts->memory_size = default_memory_size;
     opts->run_cnt = default_run_cnt;
     opts->verbosity = default_verbosity;
+    opts->pattern = MALLOC_PATTERN_E_UNIFORM;
     opts->seed = (uint32_t) time(NULL);
 
-    while ((c = getopt(argc, argv, "n:r:v:s:hb:")) != -1) {
+    while ((c = getopt(argc, argv, "n:r:v:s:hb:l")) != -1) {
         switch (c) {
         case 'n':
             val = strtol(optarg, &end_ptr, 10);
@@ -200,6 +264,9 @@ parse_command_line (int argc, char **argv, malloc_example_opts_st *opts)
             if ((end_ptr != optarg) && (0 == errno)) {
                 opts->seed = val;
             }
+            break;
+        case 'l':
+            opts->pattern = MALLOC_PATTERN_E_LINEAR;
             break;
         case 'h':
         case '?':
@@ -581,7 +648,7 @@ run_malloc_example (malloc_example_input_st *input)
     memblock_obj_st *cur_item, *found_item;
     bool bool_rc;
     memblock_ctx_st ctx = {0};
-    uint32_t i, size_idx;
+    uint32_t i, size_idx, idx, cnt;
     void *ptr_array[input->opts->malloc_cnt];
     mkavl_rc_e mkavl_rc;
 
@@ -611,27 +678,49 @@ run_malloc_example (malloc_example_input_st *input)
     printf("Allocated %u pointers\n", input->opts->malloc_cnt);
     display_memory(input->tree_h, base_addr, input->opts->memory_size);
 
-    /* Free half the pointers */
+    /* Free up to half the pointers */
+    cnt = 0;
     for (i = 0; i < (input->opts->malloc_cnt / 2); ++i) {
-        my_free(input->tree_h, ptr_array[i]);
+        switch (input->opts->pattern) {
+        case MALLOC_PATTERN_E_LINEAR:
+            idx = i;
+            break;
+        case MALLOC_PATTERN_E_UNIFORM:
+            idx = (rand() % NELEMS(ptr_array));
+            break;
+        default:
+            abort();
+            break;
+        }
+        if (NULL != ptr_array[idx]) {
+            my_free(input->tree_h, ptr_array[idx]);
+            ptr_array[idx] = NULL;
+            ++cnt;
+        }
     }
 
-    printf("Freed %u pointers\n", (input->opts->malloc_cnt / 2));
+    printf("Freed %u pointers\n", cnt);
     display_memory(input->tree_h, base_addr, input->opts->memory_size);
 
-    /* Allocate that half again */
-    for (i = 0; i < (input->opts->malloc_cnt / 2); ++i) {
+    /* Re-allocate those pointers */
+    cnt = 0;
+    for (i = 0; i < input->opts->malloc_cnt; ++i) {
+        if (NULL != ptr_array[i]) {
+            continue;
+        }
         size_idx = (rand() % NELEMS(malloc_sizes));
         ptr_array[i] = my_malloc(input->tree_h, malloc_sizes[size_idx]);
         assert_abort(NULL != ptr_array[i]);
+        ++cnt;
     }
 
-    printf("Allocated %u pointers\n", (input->opts->malloc_cnt / 2));
+    printf("Allocated %u pointers\n", cnt);
     display_memory(input->tree_h, base_addr, input->opts->memory_size);
 
     /* Free all the pointers */
     for (i = 0; i < input->opts->malloc_cnt; ++i) {
         my_free(input->tree_h, ptr_array[i]);
+        ptr_array[i] = NULL;
     }
 
     printf("Freed all memory\n");
