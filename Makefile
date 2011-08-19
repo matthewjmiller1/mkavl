@@ -77,4 +77,6 @@ doc:
 
 tar:
 	tar -czvf $(NAME).tar.gz ../$(NAME) --exclude *.swp --exclude *.o \
-	--exclude test_$(NAME) --exclude $(NAME).tar.gz
+	--exclude test_$(NAME) --exclude employee_example \
+        --exclude malloc_example --exclude *.a \
+        --exclude *.so* --exclude .git --exclude $(NAME).tar.gz
